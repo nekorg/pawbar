@@ -40,19 +40,21 @@ pawbar
 
 By default the bar is configured with only a clock and a battery. You can add modules by editing `$HOME/.config/pawbar/pawbar.yaml`.
 
-It has 16 modules (all customisable upto a certain extent,for now):
+It has 18 modules (all customisable upto a certain extent,for now):
  - `backlight`: A screen brightness indicator (interactable)
  - `battery`: A battery module with dynamic icons and colors
  - `bluetooth`: A simple bluetooth conenction indicator (for now, without interactive menu)
- - `clock`: A simple date-time module (format changable on click)
+ - `clock`: A simple date-time module (format changable on click, includes timeline-wide calendar)
  - `cpu`: CPU usage 
  - `custom`: perform custom tasks, e.g. running at script, opening an app etc.
  - `disk`: Disk usage (format changable on click)
  - `idleInhibitor`: toggle screen off/lock actions as allowed/inhibited.
  - `locale`: Current locale
  - `mpris`: mpris player, with play/pause (interactable),artist,title.
+ - `powerprofiles`: An interactable menu to choose Performance,Balanced,Power-saver mode from.
  - `ram`: RAM usage (format changable on click)
- - `title`: A window class & title display ((hyprland/i3/sway)
+ - `title`: A window class & title display (hyprland/i3/sway)
+ - `sessioncontrols`: An interactable menu to choose Reboot,PowerOff,Suspend,Logout from.
  - `tray`: tray using nm-applet (with menu)
  - `volume`: A Volume level indicator (interactable)
  - `wifi`: A simple wifi conenction indicator (without menu, interatable on clicks)
@@ -81,9 +83,6 @@ right:
      - [ ] bluetooth (with menu)
      - [ ] tray (more functional)
      - [ ] workspace and title for more WMs
-     - [ ] power profiles
-     - [ ] session controls (e.g. suspend)
-     - [ ] calender addition to module(clock)
      - [ ] Suggest more
  - [ ] Extended module config
  - [ ] Extended bar config

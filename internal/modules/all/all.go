@@ -22,6 +22,7 @@ import (
 	_ "github.com/nekorg/pawbar/internal/modules/mpris"
 	_ "github.com/nekorg/pawbar/internal/modules/powerProfiles"
 	_ "github.com/nekorg/pawbar/internal/modules/ram"
+	_ "github.com/nekorg/pawbar/internal/modules/sessionControls"
 	_ "github.com/nekorg/pawbar/internal/modules/title"
 	_ "github.com/nekorg/pawbar/internal/modules/tray"
 	_ "github.com/nekorg/pawbar/internal/modules/volume"
