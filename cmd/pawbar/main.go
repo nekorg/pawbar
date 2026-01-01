@@ -30,7 +30,7 @@ func main() {
 		"pawbar",
 		katnip.Config{
 			Size:        katnip.Vector{X: 0, Y: 1},
-			FocusPolicy: katnip.FocusOnDemand,
+			FocusPolicy: katnip.FocusNotAllowed,
 			KittyOverrides: []string{
 				"font_size=12",
 				"cursor_trail=0",
