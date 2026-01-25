@@ -25,7 +25,7 @@ type MouseOptions struct {
 }
 
 func defaultOptions() Options {
-	pps, _ := config.NewTemplate("󰐦")
+	pps, _ := config.NewTemplate("{{.Icon}}")
 	return Options{
 		Format:  config.Format{Template: pps},
 		OnClick: config.MouseActions[MouseOptions]{},
