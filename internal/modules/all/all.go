@@ -17,7 +17,7 @@ import (
 	_ "github.com/nekorg/pawbar/internal/modules/cpu"
 	_ "github.com/nekorg/pawbar/internal/modules/custom"
 	_ "github.com/nekorg/pawbar/internal/modules/disk"
-	_ "github.com/nekorg/pawbar/internal/modules/idleInhibitor"
+	_ "github.com/nekorg/pawbar/internal/modules/idleinhibitor"
 	_ "github.com/nekorg/pawbar/internal/modules/locale"
 	_ "github.com/nekorg/pawbar/internal/modules/mpris"
 	_ "github.com/nekorg/pawbar/internal/modules/powerprofiles"
