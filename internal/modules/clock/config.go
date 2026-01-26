@@ -17,6 +17,7 @@ import (
 //
 //  clock:
 //     format: "%Y-%m-%d %H:%M:%S"
+//     auto_tick: true                            # derive tick from format
 //     tick:   5s                                   # interval
 //     onmouse:
 //       left:
@@ -33,12 +34,13 @@ func init() {
 }
 
 type Options struct {
-	Fg      config.Color                      `yaml:"fg"`
-	Bg      config.Color                      `yaml:"bg"`
-	Cursor  config.Cursor                     `yaml:"cursor"`
-	Tick    config.Duration                   `yaml:"tick"`
-	Format  string                            `yaml:"format"`
-	OnClick config.MouseActions[MouseOptions] `yaml:"onmouse"`
+	Fg       config.Color                      `yaml:"fg"`
+	Bg       config.Color                      `yaml:"bg"`
+	Cursor   config.Cursor                     `yaml:"cursor"`
+	Tick     config.Duration                   `yaml:"tick"`
+	AutoTick bool                              `yaml:"auto_tick"`
+	Format   string                            `yaml:"format"`
+	OnClick  config.MouseActions[MouseOptions] `yaml:"onmouse"`
 }
 
 type MouseOptions struct {
@@ -51,8 +53,9 @@ type MouseOptions struct {
 
 func defaultOptions() Options {
 	return Options{
-		Format:  "%Y-%m-%d %H:%M:%S",
-		Tick:    config.Duration(5 * time.Second),
-		OnClick: config.MouseActions[MouseOptions]{},
+		Format:   "%Y-%m-%d %H:%M:%S",
+		Tick:     config.Duration(5 * time.Second),
+		AutoTick: true,
+		OnClick:  config.MouseActions[MouseOptions]{},
 	}
 }
