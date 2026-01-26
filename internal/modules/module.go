@@ -53,8 +53,13 @@ type FocusOut struct {
 	PrevMod Module
 }
 
-func (FocusIn) String() string  { return "FocusIn" }
-func (FocusOut) String() string { return "FocusOut" }
+type SystemWake struct {
+	Source string
+}
+
+func (FocusIn) String() string    { return "FocusIn" }
+func (FocusOut) String() string   { return "FocusOut" }
+func (SystemWake) String() string { return "SystemWake" }
 
 var (
 	ECSPACE = EventCell{

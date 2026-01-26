@@ -103,6 +103,22 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	utils.Logger.Printf("Panel Size (cells): %d, %d\n", w, h)
 	mouseShape := vaxis.MouseShapeDefault
 
+	broadcastEvent := func(ev modules.Event) {
+		mods := make([]modules.Module, 0, len(l)+len(m)+len(r))
+		mods = append(mods, l...)
+		mods = append(mods, m...)
+		mods = append(mods, r...)
+		for _, mod := range mods {
+			if mod == nil {
+				continue
+			}
+			_, send := mod.Channels()
+			go func(send chan<- modules.Event) {
+				send <- ev
+			}(send)
+		}
+	}
+
 	tui.Init(w, h, l, m, r, cfg.Bar)
 	tui.FullRender(win)
 	vx.Render()
@@ -197,8 +213,9 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			tui.Resize(w, h)
 			tui.FullRender(win)
 			vx.Render()
-		case <-resumeCh:
+		case resumeEv := <-resumeCh:
 			utils.Logger.Printf("full render: waking from suspend")
+			broadcastEvent(modules.Event{VaxisEvent: modules.SystemWake{Source: resumeEv.Source}})
 			win = vx.Window()
 			w, h = win.Size()
 			tui.Resize(w, h)
