@@ -67,6 +67,28 @@ func getProfile(obj dbus.BusObject) string {
 	return v.Value().(string)
 }
 
+func setProfile(profile string, obj dbus.BusObject) {
+	call := obj.Call("org.freedesktop.DBus.Properties.Set", 0,
+		"org.freedesktop.UPower.PowerProfiles",
+		"ActiveProfile",
+		dbus.MakeVariant(profile),
+	)
+	if call.Err != nil {
+		fmt.Errorf("error in setting ActiveProfile: %s", call.Err)
+	}
+}
+
+func toggle(mod *powerProfileModule, obj dbus.BusObject) {
+	switch mod.state {
+	case "performance":
+		setProfile("power-saver", obj)
+	case "balanced":
+		setProfile("performance", obj)
+	case "power-saver":
+		setProfile("balanced", obj)
+	}
+}
+
 func (mod *powerProfileModule) Run() (<-chan bool, chan<- modules.Event, error) {
 	mod.receive = make(chan bool)
 	mod.send = make(chan modules.Event)
@@ -98,6 +120,8 @@ func (mod *powerProfileModule) Run() (<-chan bool, chan<- modules.Event, error) 
 					switch ev.Button {
 					case vaxis.MouseRightButton:
 						go power.LaunchMenu(ev.XPixel/2, ev.YPixel/2)
+					case vaxis.MouseLeftButton:
+						toggle(mod, obj)
 					}
 
 				case modules.FocusIn:
