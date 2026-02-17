@@ -4,7 +4,7 @@
 //
 // SPDX-License-Identifier: bsd
 
-package main
+package cmd
 
 import (
 	"os"

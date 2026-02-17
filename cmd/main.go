@@ -4,7 +4,7 @@
 //
 // SPDX-License-Identifier: bsd
 
-package main
+package cmd
 
 import (
 	"context"
@@ -25,7 +25,7 @@ func init() {
 	katnip.RegisterFunc("pawbar", mainLoop)
 }
 
-func main() {
+func Pawbar() {
 	panel := katnip.NewPanel(
 		"pawbar",
 		katnip.Config{
@@ -127,6 +127,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	for isRunning {
 		select {
 		case ev := <-screenEvents:
+			utils.Logger.Printf("Event: %#v\n", ev)
 			switch ev := ev.(type) {
 			case vaxis.Resize:
 				pw, ph = ev.XPixel, ev.YPixel
