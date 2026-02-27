@@ -9,6 +9,7 @@ package volume
 import (
 	"bytes"
 	"errors"
+	"math"
 
 	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/internal/config"
@@ -155,7 +156,7 @@ func (mod *VolumeModule) Render() []modules.EventCell {
 		style.Foreground = mod.opts.Fg.Go()
 		style.Background = mod.opts.Bg.Go()
 
-		vol := int(mod.Volume)
+		vol := int(math.Round(mod.Volume))
 		icons := mod.opts.Icons
 		idx := utils.Clamp(vol*len(icons)/100, 0, len(icons)-1)
 		icon := icons[idx]
