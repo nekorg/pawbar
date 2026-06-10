@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/nekorg/pawbar/internal/services"
@@ -105,6 +106,73 @@ type Workspace struct {
 	Lastwindowtitle string `json:"lastwindowtitle"`
 }
 
+type hyprVersion struct {
+	Version string `json:"version"`
+}
+
+func getHyprVersion() string {
+	sockaddr1, _ := GetHyprSocketAddrs()
+	sock, err := net.Dial("unix", sockaddr1)
+	if err != nil {
+		panic(err)
+	}
+	defer sock.Close()
+
+	sock.Write([]byte("-j/version"))
+	var o hyprVersion
+
+	err = json.NewDecoder(sock).Decode(&o)
+	if err != nil {
+		panic(err)
+	}
+	return o.Version
+}
+
+func isHyprVersionLessThan(version string) bool {
+	return compareVersion(getHyprVersion(), version) < 0
+}
+
+func compareVersion(a, b string) int {
+	ap := parseVersion(a)
+	bp := parseVersion(b)
+
+	for i := 0; i < len(ap) || i < len(bp); i++ {
+		av, bv := 0, 0
+		if i < len(ap) {
+			av = ap[i]
+		}
+		if i < len(bp) {
+			bv = bp[i]
+		}
+
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+	}
+
+	return 0
+}
+
+func parseVersion(version string) []int {
+	version = strings.TrimPrefix(version, "v")
+	version = strings.Split(version, "-")[0]
+	version = strings.Split(version, "+")[0]
+
+	parts := strings.Split(version, ".")
+	parsed := make([]int, 0, len(parts))
+	for _, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			break
+		}
+		parsed = append(parsed, n)
+	}
+	return parsed
+}
+
 func GetWorkspaces() []Workspace {
 	sockaddr1, _ := GetHyprSocketAddrs()
 	sock, err := net.Dial("unix", sockaddr1)
@@ -194,6 +262,11 @@ func GetClients() []Client {
 }
 
 func GoToWorkspace(name string) {
+	command := "/dispatch hl.dsp.focus({ workspace = \"" + name + "\" })"
+	if isHyprVersionLessThan("0.55") {
+		command = "/dispatch workspace " + name
+	}
+
 	sockaddr1, _ := GetHyprSocketAddrs()
 	sock, err := net.Dial("unix", sockaddr1)
 	if err != nil {
@@ -201,5 +274,5 @@ func GoToWorkspace(name string) {
 	}
 	defer sock.Close()
 
-	sock.Write([]byte("/dispatch workspace " + name))
+	sock.Write([]byte(command))
 }
