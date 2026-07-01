@@ -26,7 +26,7 @@
           version = "0-unstable-2025-08-31";
           src = ./.;
           subPackages = [ "cmd/pawbar" ];
-          vendorHash = "sha256-5ysy7DGLE99svDPUw1vS05CT7HRcSP1ov27rTqm6a8Y=";
+          vendorHash = "sha256-DUjfFrmpjSUWDicncTXvL1mnnPqEEKGyz6PTLEnGD7E=";
           buildInputs = with pkgs; [
             udev
             librsvg
