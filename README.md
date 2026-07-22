@@ -38,7 +38,7 @@ pawbar
 ```
 
 
-By default the bar is configured with only a clock and a battery. You can add modules by editing `$HOME/.config/pawbar/pawbar.yaml`.
+You can add modules by editing `$HOME/.config/pawbar/pawbar.yaml`. The config is hot-reloaded, so the bar updates as you save. Validate it any time with `pawbar --check`. See [docs/examples/pawbar.yaml](docs/examples/pawbar.yaml) for a starting point and the docs for the full schema (theme variables, per-state styling, format placeholders and mouse bindings).
 
 It has 18 modules (all customisable upto a certain extent,for now):
  - `backlight`: A screen brightness indicator (interactable)
@@ -63,18 +63,34 @@ It has 18 modules (all customisable upto a certain extent,for now):
  - `space`: A single space
  - `sep`: A full height vertical bar and a space on either side
 
-A typical(my) config looks like:
+A typical config looks like:
 ```yaml
+theme:
+  defaults:
+    states:
+      hover: { bold: true }
+
 left:
   - ws
   - title
 
 right:
+  - volume:
+      states:
+        muted: { fg: "@warning" }
+  - space
+  - sep
+  - space
   - battery
   - space
   - sep
   - space
-  - clock
+  - clock:
+      format: "{time:%H:%M}"
+      states:
+        full: { format: "{time:%A %d %B %H:%M:%S}" }
+      on:
+        left: { cycle: [full] }
 ```
 
 ## Roadmap

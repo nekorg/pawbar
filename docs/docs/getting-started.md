@@ -18,7 +18,7 @@ Clone and compile `pawbar`
 ```sh
 git clone --recurse-submodules https://github.com/codelif/pawbar
 cd pawbar
-go build ./cmd/pawbar
+go build .
 ```
 
 Install using the installation script:
@@ -44,7 +44,7 @@ It sets a right anchored `clock` module with default configuration
 A useful default configuration can be:
 ```yaml
 bar:
-  truncate_priority: 
+  truncate_priority:
     - middle
     - right
     - left
@@ -53,21 +53,19 @@ left:
   - title
 middle:
   - clock:
-      format: "%a %H:%M" 
-      tick: 1m
-      onmouse:
-        hover:
-          config:
-            format: "%a %H:%M:%S"
-            tick: 1s
-            fg: indianred
+      format: "{time:%a %H:%M}"
+      states:
+        hover: { format: "{time:%a %H:%M:%S}", fg: indianred }
 right:
   - volume:
-      onmouse:
-        left:
-          run: "pavucontrol"
+      on:
+        right: { run: "pavucontrol" }
   - sep
   - backlight
   - sep
   - battery
 ```
+
+The config is hot-reloaded on save, and `pawbar --check` validates it
+without starting the bar. See [Configuration](/docs/configuration) for
+the full schema.
