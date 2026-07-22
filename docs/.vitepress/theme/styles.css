@@ -12,6 +12,20 @@
 /*   --vp-font-family-base: 'Karla', system-ui, sans-serif; */
 /*   --vp-font-family-mono: 'Source Code Pro', ui-monospace, monospace; */
 /* } */
+
+/* VitePress default stacks + NerdFontsSymbols appended: font fallback is
+   per glyph, so ordinary text keeps the default fonts and only Nerd Font
+   icon codepoints fall through to the symbols webfont (loaded from
+   nerdfonts.com in the site head). */
+:root {
+  --vp-font-family-base:
+    'Inter', ui-sans-serif, system-ui, sans-serif,
+    'NerdFontsSymbols Nerd Font', 'Apple Color Emoji', 'Segoe UI Emoji',
+    'Segoe UI Symbol', 'Noto Color Emoji';
+  --vp-font-family-mono:
+    ui-monospace, 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono',
+    'Courier New', 'NerdFontsSymbols Nerd Font', monospace;
+}
 /* ===== Base (light) ===================================================== */
 :root {
 

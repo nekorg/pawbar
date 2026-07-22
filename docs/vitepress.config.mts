@@ -19,6 +19,15 @@ export default defineConfig({
         rel: 'stylesheet',
         href: 'https://fonts.googleapis.com/css2?family=Karla:wght@400;500;700&family=Source+Code+Pro:wght@400;500;700&display=swap'
       }
+    ],
+    [
+      // Symbols-only Nerd Font, so module icons (U+E000..U+F8FF and
+      // plane-15 PUA) render without requiring a locally patched font.
+      'link',
+      {
+        rel: 'stylesheet',
+        href: 'https://www.nerdfonts.com/assets/css/webfont.css'
+      }
     ]
   ],
   themeConfig: {
