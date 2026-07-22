@@ -7,7 +7,6 @@
 package backlight
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -15,259 +14,137 @@ import (
 	"strconv"
 	"strings"
 
-	"git.sr.ht/~rockorager/vaxis"
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/modules"
-	"github.com/nekorg/pawbar/internal/utils"
 	"github.com/jochenvg/go-udev"
+	"github.com/nekorg/pawbar/internal/utils"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-type Backlight struct {
-	receive           chan bool
-	send              chan modules.Event
-	status            map[string]int
-	backlight         string
-	MaxBrightness     int
-	currentBrightness int
-	Type              string
-	opts              Options
-	initialOpts       Options
+type backlightModule struct {
+	opts *Options
+
+	device string
+	now    int
+	max    int
 }
 
-func New() modules.Module {
-	return &Backlight{}
-}
-
-func (mod *Backlight) Dependencies() []string {
-	return []string{}
-}
-
-func (mod *Backlight) Udev() (<-chan *udev.Device, error) {
-	udevInstance := udev.Udev{}
-	monitor := udevInstance.NewMonitorFromNetlink("udev")
-
-	err := monitor.FilterAddMatchSubsystem("backlight")
-	if err != nil {
-		return nil, err
+func (m *backlightModule) Init(ctx *module.Ctx) error {
+	m.opts = ctx.Options().(*Options)
+	if err := m.pickDevice(); err != nil {
+		return err
 	}
+	m.read(ctx)
+	module.On(ctx, udevSource(), func(struct{}) { m.read(ctx) })
+	return nil
+}
 
-	context_ := context.Background()
-	devChan, errChan, err := monitor.DeviceChan(context_)
-	if devChan == nil || errChan == nil {
-		return nil, fmt.Errorf("failed to initialize backlight udev monitor")
-	}
+func (m *backlightModule) OnState(ctx *module.Ctx) {
+	m.opts = ctx.Options().(*Options)
+}
 
-	inchan := make(chan *udev.Device)
-	go func() {
-		isRunning := true
-		for isRunning {
-			select {
-			case d := <-devChan:
-				if d == nil {
-					isRunning = false
-				} else {
-					inchan <- d
-				}
-			case e := <-errChan:
-				if e != nil {
-					fmt.Println("udev monitor error:", e)
-					isRunning = false
-				}
-			case <-context_.Done():
-				isRunning = false
-			}
+// udevSource emits a signal for every backlight udev event.
+func udevSource() module.Source[struct{}] {
+	return module.NewSource(func(emit func(struct{})) (module.Conn, error) {
+		u := udev.Udev{}
+		monitor := u.NewMonitorFromNetlink("udev")
+		if err := monitor.FilterAddMatchSubsystem("backlight"); err != nil {
+			return nil, err
 		}
-	}()
-
-	return inchan, nil
+		cctx, cancel := context.WithCancel(context.Background())
+		devChan, errChan, err := monitor.DeviceChan(cctx)
+		if err != nil || devChan == nil || errChan == nil {
+			cancel()
+			if err == nil {
+				err = fmt.Errorf("failed to initialize backlight udev monitor")
+			}
+			return nil, err
+		}
+		go func() {
+			for {
+				select {
+				case d, ok := <-devChan:
+					if !ok || d == nil {
+						return
+					}
+					emit(struct{}{})
+				case e := <-errChan:
+					if e != nil {
+						return
+					}
+				case <-cctx.Done():
+					return
+				}
+			}
+		}()
+		return module.ConnFuncs{StopFn: cancel}, nil
+	})
 }
 
-func (mod *Backlight) getBacklight() (string, error) {
+func (m *backlightModule) pickDevice() error {
 	basePath := "/sys/class/backlight/"
 	entries, err := os.ReadDir(basePath)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	type backlightDevice struct {
-		name          string
-		devType       string
-		maxBrightness int
+	type device struct {
+		name    string
+		devType string
+		max     int
 	}
-	var validDevices []backlightDevice
-
+	var valid []device
 	for _, entry := range entries {
 		devicePath := filepath.Join(basePath, entry.Name())
 		typeData, err := os.ReadFile(filepath.Join(devicePath, "type"))
 		if err != nil {
 			continue
 		}
-		deviceType := strings.TrimSpace(string(typeData))
-
 		maxData, err := os.ReadFile(filepath.Join(devicePath, "max_brightness"))
 		if err != nil {
 			continue
 		}
-		maxBrightness, err := strconv.Atoi(strings.TrimSpace(string(maxData)))
-		if err != nil || maxBrightness == 0 {
+		max, err := strconv.Atoi(strings.TrimSpace(string(maxData)))
+		if err != nil || max == 0 {
 			continue
 		}
-
-		validDevices = append(validDevices, backlightDevice{
-			name:          entry.Name(),
-			devType:       deviceType,
-			maxBrightness: maxBrightness,
-		})
+		valid = append(valid, device{entry.Name(), strings.TrimSpace(string(typeData)), max})
+	}
+	if len(valid) == 0 {
+		return fmt.Errorf("no valid backlight devices found")
 	}
 
-	if len(validDevices) == 0 {
-		fmt.Println("No valid backlight devices found.")
-		return "", fmt.Errorf("no valid backlight devices found")
-	}
-
-	selected := validDevices[0]
-	for _, d := range validDevices {
+	selected := valid[0]
+	for _, d := range valid {
 		if d.devType == "raw" {
 			selected = d
 			break
 		}
 	}
-
-	mod.Type = selected.devType
-	mod.MaxBrightness = selected.maxBrightness
-	return selected.name, nil
+	m.device, m.max = selected.name, selected.max
+	return nil
 }
 
-func (mod *Backlight) Channels() (<-chan bool, chan<- modules.Event) {
-	return mod.receive, mod.send
-}
-
-func (mod *Backlight) Name() string {
-	return "backlight"
-}
-
-func (mod *Backlight) Update() {
-	if mod.backlight == "" {
-		deviceName, err := mod.getBacklight()
-		if err != nil {
-			fmt.Println("Error getting backlight device:", err)
-			return
-		}
-		mod.backlight = deviceName
-	}
-
-	if mod.status == nil {
-		mod.status = make(map[string]int)
-	}
-
-	base := filepath.Join("/sys/class/backlight", mod.backlight)
-	data, err := os.ReadFile(filepath.Join(base, "brightness"))
+func (m *backlightModule) read(ctx *module.Ctx) {
+	data, err := os.ReadFile(filepath.Join("/sys/class/backlight", m.device, "brightness"))
 	if err != nil {
-		fmt.Println("Error reading brightness:", err)
+		ctx.Log("read brightness: %v", err)
 		return
 	}
 	now, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		fmt.Println("Error converting brightness:", err)
+		ctx.Log("parse brightness: %v", err)
 		return
 	}
-	mod.status["now"] = now
-	mod.currentBrightness = now
-
-	if mod.MaxBrightness == 0 {
-		mdata, err := os.ReadFile(filepath.Join(base, "max_brightness"))
-		if err == nil {
-			maxVal, _ := strconv.Atoi(strings.TrimSpace(string(mdata)))
-			mod.MaxBrightness = maxVal
-		}
-	}
-	mod.status["max"] = mod.MaxBrightness
+	m.now = now
 }
 
-func (mod *Backlight) Render() []modules.EventCell {
-	if mod.status == nil {
-		return nil
+func (m *backlightModule) Render(w *module.Writer) {
+	if m.max == 0 {
+		return
 	}
-	now := mod.status["now"]
-	maxVal := mod.status["max"]
-	if maxVal == 0 {
-		return nil
+	pct := m.now * 100 / m.max
+	icon := ""
+	if len(m.opts.Icons) > 0 {
+		icon = m.opts.Icons[utils.Clamp(pct*len(m.opts.Icons)/100, 0, len(m.opts.Icons)-1)]
 	}
-	percent := (now * 100) / maxVal
-
-	style := vaxis.Style{}
-	style.Foreground = mod.opts.Fg.Go()
-	style.Background = mod.opts.Bg.Go()
-
-	icons := mod.opts.Icons
-	idx := utils.Clamp(percent*len(icons)/100, 0, len(icons)-1)
-	icon := icons[idx]
-	data := struct {
-		Icon    string
-		Percent int
-		Now     int
-		Max     int
-	}{
-		Icon:    string(icon),
-		Percent: percent,
-		Now:     now,
-		Max:     maxVal,
-	}
-
-	var buf bytes.Buffer
-	_ = mod.opts.Format.Execute(&buf, data)
-	rch := vaxis.Characters(buf.String())
-	r := make([]modules.EventCell, len(rch))
-	for i, ch := range rch {
-		r[i] = modules.EventCell{
-			C:          vaxis.Cell{Character: ch, Style: style},
-			Mod:        mod,
-			MouseShape: mod.opts.Cursor.Go(),
-		}
-	}
-	return r
-}
-
-func (mod *Backlight) Run() (<-chan bool, chan<- modules.Event, error) {
-	mod.send = make(chan modules.Event)
-	mod.receive = make(chan bool)
-	mod.initialOpts = mod.opts
-	mod.Update()
-
-	uchan, err := mod.Udev()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	go func() {
-		for {
-			select {
-			case <-uchan:
-				mod.Update()
-				mod.receive <- true
-			case e := <-mod.send:
-				switch ev := e.VaxisEvent.(type) {
-				case vaxis.Mouse:
-					if ev.EventType != vaxis.EventPress {
-						break
-					}
-					btn := config.ButtonName(ev)
-					if mod.opts.OnClick.Dispatch(btn, &mod.initialOpts, &mod.opts) {
-						mod.receive <- true
-					}
-				case modules.FocusIn:
-					if mod.opts.OnClick.HoverIn(&mod.opts) {
-						mod.receive <- true
-					}
-
-				case modules.FocusOut:
-					if mod.opts.OnClick.HoverOut(&mod.opts) {
-						mod.receive <- true
-					}
-				}
-			}
-		}
-	}()
-
-	return mod.receive, mod.send, nil
+	w.Text(module.P{"icon": icon, "light": pct, "now": m.now, "max": m.max})
 }

@@ -7,91 +7,40 @@
 package battery
 
 import (
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/lookup/colors"
-	"github.com/nekorg/pawbar/internal/modules"
+	_ "embed"
+
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-func init() {
-	config.RegisterModule("battery", defaultOptions, func(o Options) (modules.Module, error) { return &Battery{opts: o}, nil })
-}
-
-type ThresholdOptions struct {
-	Percent   config.Percent   `yaml:"percent"`
-	Direction config.Direction `yaml:"direction"`
-	Fg        config.Color     `yaml:"fg"`
-	Bg        config.Color     `yaml:"bg"`
-}
-
-type DischargingOptions struct {
-	Fg    config.Color `yaml:"fg"`
-	Bg    config.Color `yaml:"bg"`
-	Icons []rune       `yaml:"icons"`
-}
-
-type ChargingOptions struct {
-	Fg    config.Color `yaml:"fg"`
-	Bg    config.Color `yaml:"bg"`
-	Icons []rune       `yaml:"icons"`
-}
-
-type ChargedOptions struct {
-	Fg   config.Color `yaml:"fg"`
-	Bg   config.Color `yaml:"bg"`
-	Icon rune         `yaml:"icon"`
-}
+//go:embed battery.yaml
+var defaults []byte
 
 type Options struct {
-	Fg          config.Color                      `yaml:"fg"`
-	Bg          config.Color                      `yaml:"bg"`
-	Cursor      config.Cursor                     `yaml:"cursor"`
-	Format      config.Format                     `yaml:"format"`
-	Discharging DischargingOptions                `yaml:"discharging"`
-	Charging    ChargingOptions                   `yaml:"charging"`
-	Charged     ChargedOptions                    `yaml:"charged"`
-	Thresholds  []ThresholdOptions                `yaml:"thresholds"`
-	OnClick     config.MouseActions[MouseOptions] `yaml:"onmouse"`
+	DischargingIcons []string       `yaml:"discharging_icons"`
+	ChargingIcons    []string       `yaml:"charging_icons"`
+	ChargedIcon      string         `yaml:"charged_icon"`
+	WarnAt           module.Percent `yaml:"warn_at"`
+	LowAt            module.Percent `yaml:"low_at"`
 }
 
-type MouseOptions struct {
-	Fg     *config.Color  `yaml:"fg"`
-	Bg     *config.Color  `yaml:"bg"`
-	Cursor *config.Cursor `yaml:"cursor"`
-	Format *config.Format `yaml:"format"`
-}
-
-func defaultOptions() Options {
-	fv, _ := config.NewTemplate("{{.Icon}} {{.Percent}}%")
-	fr, _ := config.NewTemplate("{{.Hours}} hrs {{ .Minutes}} mins")
-	urgClr, _ := colors.ParseColor("@urgent")
-	warClr, _ := colors.ParseColor("@warning")
-	return Options{
-		Format: config.Format{Template: fv},
-		Discharging: DischargingOptions{
-			Icons: []rune{'󰂃', '󰁺', '󰁻', '󰁼', '󰁽', '󰁾', '󰁿', '󰂀', '󰂁', '󰂂', '󰁹'},
+func init() {
+	module.Register(module.Def{
+		Name:    "battery",
+		Doc:     "battery level via upower",
+		New:     func() module.Module { return &batteryModule{} },
+		Options: func() any { return &Options{} },
+		States: []module.StateDef{
+			{Name: "warn", Doc: "battery at or below warn_at"},
+			{Name: "low", Doc: "battery at or below low_at"},
+			{Name: "charging", Doc: "plugged in and charging"},
+			{Name: "charged", Doc: "fully charged"},
 		},
-		Charging: ChargingOptions{
-			Icons: []rune{'󰢟', '󰢜', '󰂆', '󰂇', '󰂈', '󰢝', '󰂉', '󰢞', '󰂊', '󰂋', '󰂅'},
+		Placeholders: []module.Placeholder{
+			{Name: "icon", Doc: "battery level icon", Kind: module.KindString},
+			{Name: "bat", Doc: "battery percentage", Kind: module.KindNumber},
+			{Name: "hours", Doc: "hours until full/empty", Kind: module.KindNumber},
+			{Name: "minutes", Doc: "minutes until full/empty (0-59)", Kind: module.KindNumber},
 		},
-		Charged: ChargedOptions{
-			Icon: '󱟢',
-		},
-		Thresholds: []ThresholdOptions{
-			{
-				Percent: 15,
-				Fg:      config.Color(urgClr),
-			},
-			{
-				Percent: 30,
-				Fg:      config.Color(warClr),
-			},
-		},
-		OnClick: config.MouseActions[MouseOptions]{
-			Actions: map[string]*config.MouseAction[MouseOptions]{
-				"hover": {
-					Configs: []MouseOptions{{Format: &config.Format{Template: fr}}},
-				},
-			},
-		},
-	}
+		Defaults: defaults,
+	})
 }

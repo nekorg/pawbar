@@ -7,15 +7,13 @@
 package title
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 
-	"git.sr.ht/~rockorager/vaxis"
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/modules"
+	"github.com/nekorg/pawbar/internal/services"
 	"github.com/nekorg/pawbar/internal/services/hypr"
 	"github.com/nekorg/pawbar/internal/services/i3"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
 type Window struct {
@@ -28,135 +26,90 @@ type backend interface {
 	Events() <-chan struct{}
 }
 
-type Module struct {
+type titleModule struct {
 	b       backend
-	receive chan bool
-	send    chan modules.Event
-
-	opts        Options
-	initialOpts Options
+	release func()
+	win     Window
 }
 
-func New() modules.Module { return &Module{} }
-
-func (mod *Module) Name() string                                  { return "title" }
-func (mod *Module) Dependencies() []string                        { return nil }
-func (mod *Module) Channels() (<-chan bool, chan<- modules.Event) { return mod.receive, mod.send }
-
-func (mod *Module) Run() (<-chan bool, chan<- modules.Event, error) {
-	err := mod.selectBackend()
-	if err != nil {
-		return nil, nil, err
+func (m *titleModule) Init(ctx *module.Ctx) error {
+	if err := m.selectBackend(); err != nil {
+		return err
 	}
+	m.win = m.b.Window()
 
-	mod.receive = make(chan bool)
-	mod.send = make(chan modules.Event)
-	mod.initialOpts = mod.opts
-
-	go func() {
-		render := mod.b.Events()
-		for {
-			select {
-			case e := <-mod.send:
-				switch ev := e.VaxisEvent.(type) {
-				case vaxis.Mouse:
-					if ev.EventType != vaxis.EventPress {
-						break
-					}
-					btn := config.ButtonName(ev)
-
-					if mod.opts.OnClick.Dispatch(btn, &mod.initialOpts, &mod.opts) {
-						mod.receive <- true
-					}
-				case modules.FocusIn:
-					if mod.opts.OnClick.HoverIn(&mod.opts) {
-						mod.receive <- true
-					}
-
-				case modules.FocusOut:
-					if mod.opts.OnClick.HoverOut(&mod.opts) {
-						mod.receive <- true
-					}
-				}
-
-			case <-render:
-				mod.receive <- true
-			}
-		}
-	}()
-
-	return mod.receive, mod.send, nil
-}
-
-func (mod *Module) selectBackend() error {
-	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "" {
-		svc, ok := hypr.Register()
-		if !ok {
-			return fmt.Errorf("Could not start hypr service.")
-		}
-		mod.b = newHyprBackend(svc)
-	} else if os.Getenv("I3SOCK") != "" || os.Getenv("SWAYSOCK") != "" {
-		svc, ok := i3.Register()
-		if !ok {
-			return fmt.Errorf("Could not start i3 service.")
-		}
-		mod.b = newI3Backend(svc)
-	} else {
-		return fmt.Errorf("Could not find a wm backend for current environment.")
-	}
-
+	module.On(ctx, m.source(), func(w Window) { m.win = w })
 	return nil
 }
 
-func (mod *Module) Render() []modules.EventCell {
-	win := mod.b.Window()
-	var cells []modules.EventCell
+func (m *titleModule) source() module.Source[Window] {
+	return module.NewSource(func(emit func(Window)) (module.Conn, error) {
+		sig := m.b.Events()
+		done := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-sig:
+					emit(m.b.Window())
+				case <-done:
+					return
+				}
+			}
+		}()
+		return module.ConnFuncs{
+			StopFn: func() { close(done) },
+			WakeFn: func() { emit(m.b.Window()) },
+		}, nil
+	})
+}
 
-	if win.Class != "" {
-		style := vaxis.Style{
-			Foreground: mod.opts.Class.Fg.Go(),
-			Background: mod.opts.Class.Bg.Go(),
-		}
-
-		var buf bytes.Buffer
-		_ = mod.opts.Class.Format.Execute(&buf, struct{ Class string }{
-			Class: " " + win.Class + " ",
+func (m *titleModule) selectBackend() error {
+	switch {
+	case os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "":
+		svc, release, err := services.Acquire("hypr", func() (*hypr.Service, error) {
+			s := &hypr.Service{}
+			if err := s.Start(); err != nil {
+				return nil, err
+			}
+			return s, nil
 		})
-
-		for _, ch := range vaxis.Characters(buf.String()) {
-			cells = append(cells, modules.EventCell{
-				C: vaxis.Cell{
-					Character: ch,
-					Style:     style,
-				},
-				Mod:        mod,
-				MouseShape: vaxis.MouseShapeDefault,
-			})
+		if err != nil {
+			return fmt.Errorf("hypr service: %w", err)
 		}
-	}
+		m.b, m.release = newHyprBackend(svc), release
 
-	if win.Title != "" && win.Class != "" {
-		style := vaxis.Style{
-			Foreground: mod.opts.Title.Fg.Go(),
-			Background: mod.opts.Title.Bg.Go(),
-		}
-
-		var buf bytes.Buffer
-		_ = mod.opts.Title.Format.Execute(&buf, struct{ Title string }{
-			Title: win.Title,
+	case os.Getenv("I3SOCK") != "" || os.Getenv("SWAYSOCK") != "":
+		svc, release, err := services.Acquire("i3", func() (*i3.Service, error) {
+			s := &i3.Service{}
+			if err := s.Start(); err != nil {
+				return nil, err
+			}
+			return s, nil
 		})
-		cells = append(cells, modules.EventCell{C: vaxis.Cell{Character: vaxis.Character{Grapheme: " ", Width: 1}}, Mod: mod})
-		for _, ch := range vaxis.Characters(buf.String()) {
-			cells = append(cells, modules.EventCell{
-				C: vaxis.Cell{
-					Character: ch,
-					Style:     style,
-				},
-				Mod:        mod,
-				MouseShape: vaxis.MouseShapeDefault,
-			})
+		if err != nil {
+			return fmt.Errorf("i3 service: %w", err)
 		}
-	}
+		m.b, m.release = newI3Backend(svc), release
 
-	return cells
+	default:
+		return fmt.Errorf("no window backend for current environment")
+	}
+	return nil
+}
+
+func (m *titleModule) Stop(ctx *module.Ctx) {
+	if m.release != nil {
+		m.release()
+	}
+}
+
+func (m *titleModule) Render(w *module.Writer) {
+	data := module.P{"title": m.win.Title, "class": m.win.Class}
+	if m.win.Class != "" {
+		w.Text(data, module.States("class"))
+	}
+	if m.win.Title != "" && m.win.Class != "" {
+		w.Raw(" ")
+		w.Text(data)
+	}
 }

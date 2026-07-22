@@ -7,55 +7,31 @@
 package clock
 
 import (
-	"time"
+	_ "embed"
 
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/modules"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-// Example config:
-//
-//  clock:
-//     format: "%Y-%m-%d %H:%M:%S"
-//     auto_tick: true                            # derive tick from format
-//     tick:   5s                                   # interval
-//     onmouse:
-//       left:
-//         config:
-//           format: "%a %H:%M"
-//       right:
-//         config:
-//           format: "%d %B %Y (%A) %H:%M"
-//
-// NOTE: include an example in every module's config.go (also this message)
-
-func init() {
-	config.RegisterModule("clock", defaultOptions, func(o Options) (modules.Module, error) { return &ClockModule{opts: o}, nil })
-}
+//go:embed clock.yaml
+var defaults []byte
 
 type Options struct {
-	Fg       config.Color                      `yaml:"fg"`
-	Bg       config.Color                      `yaml:"bg"`
-	Cursor   config.Cursor                     `yaml:"cursor"`
-	Tick     config.Duration                   `yaml:"tick"`
-	AutoTick bool                              `yaml:"auto_tick"`
-	Format   string                            `yaml:"format"`
-	OnClick  config.MouseActions[MouseOptions] `yaml:"onmouse"`
+	Tick     module.Duration `yaml:"tick"`
+	AutoTick bool            `yaml:"auto_tick"`
 }
 
-type MouseOptions struct {
-	Fg     *config.Color    `yaml:"fg"`
-	Bg     *config.Color    `yaml:"bg"`
-	Cursor *config.Cursor   `yaml:"cursor"`
-	Tick   *config.Duration `yaml:"tick"`
-	Format *string          `yaml:"format"`
-}
-
-func defaultOptions() Options {
-	return Options{
-		Format:   "%Y-%m-%d %H:%M:%S",
-		Tick:     config.Duration(5 * time.Second),
-		AutoTick: true,
-		OnClick:  config.MouseActions[MouseOptions]{},
-	}
+func init() {
+	module.Register(module.Def{
+		Name:    "clock",
+		Doc:     "wall-clock date/time",
+		New:     func() module.Module { return &clockModule{} },
+		Options: func() any { return &Options{} },
+		Placeholders: []module.Placeholder{
+			{Name: "time", Doc: "current time (spec is a strftime layout)", Kind: module.KindTime},
+		},
+		Verbs: []module.VerbDef{
+			{Name: "calendar", Doc: "open the calendar menu at the pointer"},
+		},
+		Defaults: defaults,
+	})
 }

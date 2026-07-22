@@ -1,205 +1,144 @@
+// Copyright (c) 2025 Nekorg All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+//
+// SPDX-License-Identifier: bsd
+
 package powerprofiles
 
 import (
-	"bytes"
+	_ "embed"
 	"fmt"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/godbus/dbus/v5"
-
-	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/internal/menus/power"
-	"github.com/nekorg/pawbar/internal/modules"
-	"github.com/nekorg/pawbar/internal/utils"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-type powerProfileModule struct {
-	receive     chan bool
-	send        chan modules.Event
-	state       string
-	opts        Options
-	initialOpts Options
+//go:embed powerprofiles.yaml
+var defaults []byte
+
+func init() {
+	module.Register(module.Def{
+		Name: "powerprofiles",
+		Doc:  "power profile via upower power-profiles-daemon",
+		New:  func() module.Module { return &ppModule{} },
+		States: []module.StateDef{
+			{Name: "performance", Doc: "performance profile active"},
+			{Name: "balanced", Doc: "balanced profile active"},
+			{Name: "power-saver", Doc: "power-saver profile active"},
+		},
+		Placeholders: []module.Placeholder{
+			{Name: "profile", Doc: "active profile name", Kind: module.KindString},
+		},
+		Verbs: []module.VerbDef{
+			{Name: "toggle", Doc: "cycle performance, power-saver, balanced"},
+			{Name: "menu", Doc: "open the power profile menu at the pointer"},
+		},
+		Defaults: defaults,
+	})
 }
 
-func (mod *powerProfileModule) Dependencies() []string {
+const (
+	ppIface = "org.freedesktop.UPower.PowerProfiles"
+	ppPath  = "/org/freedesktop/UPower/PowerProfiles"
+)
+
+type ppModule struct {
+	conn    *dbus.Conn
+	obj     dbus.BusObject
+	profile string
+}
+
+func (m *ppModule) Init(ctx *module.Ctx) error {
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return fmt.Errorf("system bus: %w", err)
+	}
+	m.conn = conn
+	m.obj = conn.Object(ppIface, ppPath)
+
+	rule := "type='signal',sender='" + ppIface + "',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'"
+	if call := conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, rule); call.Err != nil {
+		conn.Close()
+		return fmt.Errorf("add match rule: %w", call.Err)
+	}
+	ch := make(chan *dbus.Signal, 10)
+	conn.Signal(ch)
+
+	profile, err := m.getProfile()
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	m.setProfileState(ctx, profile)
+
+	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) {
+		if len(sig.Body) < 2 {
+			return
+		}
+		iface, _ := sig.Body[0].(string)
+		changed, ok := sig.Body[1].(map[string]dbus.Variant)
+		if iface != ppIface || !ok {
+			return
+		}
+		if v, ok := changed["ActiveProfile"]; ok {
+			if s, ok := v.Value().(string); ok {
+				m.setProfileState(ctx, s)
+			}
+		}
+	})
+
+	ctx.HandleVerb("toggle", func(module.VerbArgs) error {
+		switch m.profile {
+		case "performance":
+			return m.setProfile("power-saver")
+		case "power-saver":
+			return m.setProfile("balanced")
+		default:
+			return m.setProfile("performance")
+		}
+	})
+	ctx.HandleVerb("menu", func(a module.VerbArgs) error {
+		x, y := a.XPixel/2, a.YPixel/2
+		ctx.Go(func() { power.LaunchMenu(x, y) })
+		return nil
+	})
 	return nil
 }
 
-func (mod *powerProfileModule) Channels() (<-chan bool, chan<- modules.Event) {
-	return mod.receive, mod.send
-}
-
-func (mod *powerProfileModule) Name() string {
-	return "powerprofiles"
-}
-
-func connect() (*dbus.Conn, dbus.BusObject, chan *dbus.Signal, error) {
-	conn, err := dbus.ConnectSystemBus()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to connect system bus: %s", err)
+func (m *ppModule) Stop(ctx *module.Ctx) {
+	if m.conn != nil {
+		m.conn.Close()
 	}
-
-	obj := conn.Object(
-		"org.freedesktop.UPower.PowerProfiles",
-		"/org/freedesktop/UPower/PowerProfiles",
-	)
-
-	rule := "type='signal',sender='org.freedesktop.UPower.PowerProfiles',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'"
-	call := conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, rule)
-	if call.Err != nil {
-		return conn, obj, nil, fmt.Errorf("Failed to add match rule: %s", call.Err)
-	}
-
-	ch := make(chan *dbus.Signal, 10)
-	conn.Signal(ch)
-	return conn, obj, ch, nil
 }
 
-func getProfile(obj dbus.BusObject) string {
+func (m *ppModule) setProfileState(ctx *module.Ctx, profile string) {
+	m.profile = profile
+	for _, s := range []string{"performance", "balanced", "power-saver"} {
+		ctx.SetState(s, s == profile)
+	}
+}
+
+func (m *ppModule) getProfile() (string, error) {
 	var v dbus.Variant
-	err := obj.Call("org.freedesktop.DBus.Properties.Get", 0,
-		"org.freedesktop.UPower.PowerProfiles",
-		"ActiveProfile",
-	).Store(&v)
-	if err != nil {
-		utils.Logger.Printf("error in getting ActiveProfile: %s", err)
+	if err := m.obj.Call("org.freedesktop.DBus.Properties.Get", 0,
+		ppIface, "ActiveProfile").Store(&v); err != nil {
+		return "", fmt.Errorf("get ActiveProfile: %w", err)
 	}
-	return v.Value().(string)
+	s, _ := v.Value().(string)
+	return s, nil
 }
 
-func setProfile(profile string, obj dbus.BusObject) {
-	call := obj.Call("org.freedesktop.DBus.Properties.Set", 0,
-		"org.freedesktop.UPower.PowerProfiles",
-		"ActiveProfile",
-		dbus.MakeVariant(profile),
-	)
+func (m *ppModule) setProfile(profile string) error {
+	call := m.obj.Call("org.freedesktop.DBus.Properties.Set", 0,
+		ppIface, "ActiveProfile", dbus.MakeVariant(profile))
 	if call.Err != nil {
-		fmt.Errorf("error in setting ActiveProfile: %s", call.Err)
+		return fmt.Errorf("set ActiveProfile: %w", call.Err)
 	}
+	return nil
 }
 
-func toggle(mod *powerProfileModule, obj dbus.BusObject) {
-	switch mod.state {
-	case "performance":
-		setProfile("power-saver", obj)
-	case "balanced":
-		setProfile("performance", obj)
-	case "power-saver":
-		setProfile("balanced", obj)
-	}
-}
-
-func (mod *powerProfileModule) Run() (<-chan bool, chan<- modules.Event, error) {
-	mod.receive = make(chan bool)
-	mod.send = make(chan modules.Event)
-	mod.initialOpts = mod.opts
-
-	_, obj, ch, err := connect()
-	if err != nil {
-		utils.Logger.Printf("error in connection: %s", err)
-		return nil, nil, err
-	}
-
-	mod.state = getProfile(obj)
-
-	go func() {
-		for {
-			select {
-			case e := <-mod.send:
-				switch ev := e.VaxisEvent.(type) {
-				case vaxis.Mouse:
-					if ev.EventType != vaxis.EventPress {
-						break
-					}
-					btn := config.ButtonName(ev)
-
-					if mod.opts.OnClick.Dispatch(btn, &mod.initialOpts, &mod.opts) {
-						mod.receive <- true
-					}
-
-					switch ev.Button {
-					case vaxis.MouseRightButton:
-						go power.LaunchMenu(ev.XPixel/2, ev.YPixel/2)
-					case vaxis.MouseLeftButton:
-						toggle(mod, obj)
-					}
-
-				case modules.FocusIn:
-					if mod.opts.OnClick.HoverIn(&mod.opts) {
-						mod.receive <- true
-					}
-
-				case modules.FocusOut:
-					if mod.opts.OnClick.HoverOut(&mod.opts) {
-						mod.receive <- true
-					}
-				}
-			case signal := <-ch:
-				iface, ok := signal.Body[0].(string)
-				changed, ok := signal.Body[1].(map[string]dbus.Variant)
-				if !ok {
-					continue
-				}
-
-				switch iface {
-				case "org.freedesktop.UPower.PowerProfiles":
-					if v, ok := changed["ActiveProfile"]; ok {
-						s, _ := v.Value().(string)
-						if s == "performance" {
-							mod.state = "performance"
-						} else if s == "balanced" {
-							mod.state = "balanced"
-						} else if s == "power-saver" {
-							mod.state = "power-saver"
-						}
-						mod.receive <- true
-
-					}
-				}
-			}
-		}
-	}()
-	return mod.receive, mod.send, nil
-}
-
-func (mod *powerProfileModule) Render() []modules.EventCell {
-	icon := "󰐦"
-
-	switch mod.state {
-	case "performance":
-		icon = "󰓅"
-	case "balanced":
-		icon = "󰾅"
-	case "power-saver":
-		icon = "󰾆"
-	}
-
-	data := struct {
-		Icon string
-	}{
-		Icon: string(icon),
-	}
-
-	var s vaxis.Style
-	s.Foreground = mod.opts.Fg.Go()
-	s.Background = mod.opts.Bg.Go()
-
-	var buf bytes.Buffer
-	_ = mod.opts.Format.Execute(&buf, data)
-
-	chars := vaxis.Characters(buf.String())
-	r := make([]modules.EventCell, len(chars))
-
-	for i, ch := range chars {
-		r[i] = modules.EventCell{
-			C: vaxis.Cell{
-				Character: ch,
-				Style:     s,
-			},
-			Metadata:   "",
-			Mod:        mod,
-			MouseShape: mod.opts.Cursor.Go(),
-		}
-	}
-	return r
+func (m *ppModule) Render(w *module.Writer) {
+	w.Text(module.P{"profile": m.profile})
 }

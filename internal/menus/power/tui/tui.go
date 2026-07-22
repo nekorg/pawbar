@@ -24,7 +24,7 @@ func Panel(k *katnip.Kitty, rw io.ReadWriter) int {
 
 	conn, obj, err := connect()
 	if err != nil {
-		fmt.Errorf("error in connection: %s", err)
+		fmt.Fprintf(os.Stderr, "error in connection: %s\n", err)
 	}
 	defer conn.Close()
 
@@ -101,7 +101,7 @@ func setProfile(profile string, obj dbus.BusObject) {
 		dbus.MakeVariant(profile),
 	)
 	if call.Err != nil {
-		fmt.Errorf("error in setting ActiveProfile: %s", call.Err)
+		fmt.Fprintf(os.Stderr, "error in setting ActiveProfile: %s\n", call.Err)
 	}
 }
 
@@ -112,7 +112,7 @@ func getProfile(obj dbus.BusObject) string {
 		"ActiveProfile",
 	).Store(&v)
 	if err != nil {
-		fmt.Errorf("error in getting ActiveProfile: %s", err)
+		fmt.Fprintf(os.Stderr, "error in getting ActiveProfile: %s\n", err)
 	}
 	return v.Value().(string)
 }

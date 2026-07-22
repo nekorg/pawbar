@@ -7,130 +7,111 @@
 package tray
 
 import (
-	"bytes"
+	_ "embed"
 	"strconv"
 
-	"git.sr.ht/~rockorager/vaxis"
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/modules"
+	"github.com/nekorg/pawbar/internal/services"
 	"github.com/nekorg/pawbar/internal/services/sni"
 	"github.com/nekorg/pawbar/pkg/dbusmenukitty"
-	"gopkg.in/yaml.v3"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
+//go:embed tray.yaml
+var defaults []byte
+
+// Left click activates an item, middle click secondary-activates, right
+// click opens its menu, scrolling scrolls it.
 func init() {
-	config.Register("tray", func(n *yaml.Node) (modules.Module, error) {
-		// no options yet
-		return &Module{}, nil
+	module.Register(module.Def{
+		Name:     "tray",
+		Doc:      "status notifier item tray",
+		New:      func() module.Module { return &trayModule{} },
+		Defaults: defaults,
 	})
 }
 
-type Module struct {
-	svc      *sni.Service
-	receive  chan bool
-	send     chan modules.Event
-	lastList []sni.Item
+type trayModule struct {
+	svc     *sni.Service
+	release func()
+	items   []sni.Item
 }
 
-func (m *Module) Name() string                                  { return "tray" }
-func (m *Module) Dependencies() []string                        { return []string{"sni"} }
-func (m *Module) Channels() (<-chan bool, chan<- modules.Event) { return m.receive, m.send }
-
-func (m *Module) Run() (<-chan bool, chan<- modules.Event, error) {
-	svc, ok := sni.Register()
-	if !ok {
-		return nil, nil, nil
-	}
-	m.svc = svc
-	m.receive = make(chan bool, 4)
-	m.send = make(chan modules.Event, 8)
-
-	// Subscribe to SNI updates
-	evs := svc.IssueListener()
-	m.lastList = svc.Items()
-
-	go func() {
-		for {
-			select {
-			case <-evs:
-				m.lastList = svc.Items()
-				m.receive <- true
-			case e := <-m.send:
-				switch ev := e.VaxisEvent.(type) {
-				case vaxis.Mouse:
-					if ev.EventType != vaxis.EventPress {
-						break
-					}
-					// Which “cell” (item) did we click? We encode metadata = index
-					idx, _ := strconv.Atoi(e.Cell.Metadata)
-					if idx < 0 || idx >= len(m.lastList) {
-						break
-					}
-					item := m.lastList[idx]
-					switch ev.Button {
-					case vaxis.MouseLeftButton:
-						_ = svc.Activate(item, int32(ev.XPixel), int32(ev.YPixel))
-					case vaxis.MouseMiddleButton:
-						_ = svc.SecondaryActivate(item, int32(ev.XPixel), int32(ev.YPixel))
-					case vaxis.MouseRightButton:
-						// Prefer item.ContextMenu if it exists; if menu path is published, open our TUI popup
-						if item.MenuPath != "" {
-							// TODO: this assumes 2x scale, use pkg/monitor to determine correct scale.
-							go dbusmenukitty.LaunchMenu(ev.XPixel/2, ev.YPixel/2)
-						} else {
-							_ = svc.ContextMenu(item, int32(ev.XPixel), int32(ev.YPixel))
-						}
-					case vaxis.MouseWheelUp:
-						_ = svc.Scroll(item, +120, "vertical")
-					case vaxis.MouseWheelDown:
-						_ = svc.Scroll(item, -120, "vertical")
-					}
-				}
-			}
+func (m *trayModule) Init(ctx *module.Ctx) error {
+	svc, release, err := services.Acquire("sni", func() (*sni.Service, error) {
+		s := &sni.Service{}
+		if err := s.Start(); err != nil {
+			return nil, err
 		}
-	}()
+		return s, nil
+	})
+	if err != nil {
+		return err
+	}
+	m.svc, m.release = svc, release
 
-	return m.receive, m.send, nil
+	m.items = svc.Items()
+	module.On(ctx, module.Chan(svc.IssueListener()), func(sni.Event) {
+		m.items = m.svc.Items()
+	})
+	return nil
 }
 
-func (m *Module) Render() []modules.EventCell {
-	list := m.lastList
-	if len(list) == 0 {
-		return nil
+func (m *trayModule) Stop(ctx *module.Ctx) {
+	if m.release != nil {
+		m.release()
 	}
-	// MVP text form: [icon-like]Title or Id
-	// You can swap ’labelFor’ to prefer IconName, Title, Id, etc.
-	labelFor := func(it sni.Item) string {
-		if it.IconName != "" {
-			return it.IconName // simple and compact
+}
+
+func (m *trayModule) OnMouse(ctx *module.Ctx, ev module.Mouse) {
+	if ev.Kind != "press" {
+		return
+	}
+	idx, err := strconv.Atoi(ev.Region)
+	if err != nil || idx < 0 || idx >= len(m.items) {
+		return
+	}
+	item := m.items[idx]
+	x, y := int32(ev.XPixel), int32(ev.YPixel)
+
+	switch ev.Button {
+	case "left":
+		_ = m.svc.Activate(item, x, y)
+	case "middle":
+		_ = m.svc.SecondaryActivate(item, x, y)
+	case "right":
+		if item.MenuPath != "" {
+			// TODO: this assumes 2x scale, use pkg/monitor to determine
+			// the correct scale.
+			px, py := ev.XPixel/2, ev.YPixel/2
+			ctx.Go(func() { dbusmenukitty.LaunchMenu(px, py) })
+		} else {
+			_ = m.svc.ContextMenu(item, x, y)
 		}
-		if it.Title != "" {
-			return it.Title
+	case "scroll-up":
+		_ = m.svc.Scroll(item, +120, "vertical")
+	case "scroll-down":
+		_ = m.svc.Scroll(item, -120, "vertical")
+	}
+}
+
+func (m *trayModule) Render(w *module.Writer) {
+	for i, it := range m.items {
+		if i != 0 {
+			w.Raw(" ")
 		}
-		if it.Id != "" {
-			return it.Id
-		}
+		w.Raw(labelFor(it), module.Region(strconv.Itoa(i)))
+	}
+}
+
+func labelFor(it sni.Item) string {
+	switch {
+	case it.IconName != "":
+		return it.IconName
+	case it.Title != "":
+		return it.Title
+	case it.Id != "":
+		return it.Id
+	default:
 		return "?"
 	}
-
-	var out []modules.EventCell
-	style := vaxis.Style{} // inherit bar defaults
-	for i, it := range list {
-		// Add a space separator between items
-		if i != 0 {
-			out = append(out, modules.ECSPACE)
-		}
-		var buf bytes.Buffer
-		buf.WriteString(labelFor(it))
-		for _, ch := range vaxis.Characters(buf.String()) {
-			out = append(out, modules.EventCell{
-				C:        vaxis.Cell{Character: ch, Style: style},
-				Metadata: strconv.Itoa(i), // index for click routing
-				Mod:      m,
-				// use pointer cursor to hint clickability
-				MouseShape: vaxis.MouseShapeDefault,
-			})
-		}
-	}
-	return out
 }

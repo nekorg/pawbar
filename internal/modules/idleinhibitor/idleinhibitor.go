@@ -7,15 +7,30 @@
 package idleinhibitor
 
 import (
-	"bytes"
+	_ "embed"
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
-
-	"git.sr.ht/~rockorager/vaxis"
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/modules"
+	"github.com/nekorg/pawbar/pkg/module"
 )
+
+//go:embed idleinhibitor.yaml
+var defaults []byte
+
+func init() {
+	module.Register(module.Def{
+		Name: "idleinhibitor",
+		Doc:  "keep the system awake via the desktop portal",
+		New:  func() module.Module { return &idleModule{} },
+		States: []module.StateDef{
+			{Name: "inhibiting", Doc: "idle is currently inhibited"},
+		},
+		Verbs: []module.VerbDef{
+			{Name: "toggle", Doc: "toggle idle inhibition"},
+		},
+		Defaults: defaults,
+	})
+}
 
 const (
 	portalBusName    = "org.freedesktop.portal.Desktop"
@@ -25,167 +40,64 @@ const (
 	flagIdle         = 8
 )
 
-type Format int
-
-func (f *Format) toggle() { *f ^= 1 }
-
-const (
-	FormatIdle Format = iota
-	FormatInhibit
-)
-
-type IdleModule struct {
-	receive     chan bool
-	send        chan modules.Event
-	format      Format
-	bus         *dbus.Conn
-	handle      dbus.ObjectPath
-	opts        Options
-	initialOpts Options
+type idleModule struct {
+	bus        *dbus.Conn
+	handle     dbus.ObjectPath
+	inhibiting bool
 }
 
-func (mod *IdleModule) Dependencies() []string {
-	return []string{}
-}
-
-func (mod *IdleModule) Name() string {
-	return "idleinhibitor"
-}
-
-func New() modules.Module {
-	return &IdleModule{}
-}
-
-func (mod *IdleModule) Channels() (<-chan bool, chan<- modules.Event) {
-	return mod.receive, mod.send
-}
-
-func (mod *IdleModule) setConnection() error {
+func (m *idleModule) Init(ctx *module.Ctx) error {
 	bus, err := dbus.SessionBus()
 	if err != nil {
-		return fmt.Errorf("Failed to connect to session bus: %v\n", err)
+		return fmt.Errorf("session bus: %w", err)
 	}
-	mod.bus = bus
-	return nil
-}
+	m.bus = bus
 
-func (mod *IdleModule) inhibitIdle() error {
-	obj := mod.bus.Object(portalBusName, dbus.ObjectPath(portalObjectPath))
-
-	call := obj.Call(ifaceInhibit+".Inhibit", 0, "", uint32(flagIdle), map[string]dbus.Variant{})
-	if call.Err != nil {
-		return fmt.Errorf("Inhibit call failed: %v\n", call.Err)
-	}
-
-	var handle dbus.ObjectPath
-	if err := call.Store(&handle); err != nil {
-		return fmt.Errorf("Failed to parse handle: %v\n", err)
-	}
-	mod.handle = handle
-	return nil
-}
-
-func (mod *IdleModule) closeRequest() error {
-	req := mod.bus.Object(portalBusName, mod.handle)
-	closeCall := req.Call(ifaceRequest+".Close", 0)
-	if closeCall.Err != nil {
-		return fmt.Errorf("Failed to remove inhibition: %v\n", closeCall.Err)
-	}
-	return nil
-}
-
-func (mod *IdleModule) Run() (<-chan bool, chan<- modules.Event, error) {
-	mod.receive = make(chan bool)
-	mod.send = make(chan modules.Event)
-	mod.initialOpts = mod.opts
-	err := mod.setConnection()
-	if err != nil {
-		return nil, nil, err
-	}
-	go func() {
-		for {
-			select {
-			case e := <-mod.send:
-				switch ev := e.VaxisEvent.(type) {
-				case vaxis.Mouse:
-					if ev.EventType != vaxis.EventPress {
-						break
-					}
-					btn := config.ButtonName(ev)
-
-					if btn == "left" {
-						mod.format.toggle()
-						mod.stateFunc()
-						mod.receive <- true
-					}
-					if mod.opts.OnClick.Dispatch(btn, &mod.initialOpts, &mod.opts) {
-						mod.receive <- true
-					}
-
-				case modules.FocusIn:
-					if mod.opts.OnClick.HoverIn(&mod.opts) {
-						mod.receive <- true
-					}
-
-				case modules.FocusOut:
-					if mod.opts.OnClick.HoverOut(&mod.opts) {
-						mod.receive <- true
-					}
-				}
+	ctx.HandleVerb("toggle", func(module.VerbArgs) error {
+		if m.inhibiting {
+			if err := m.closeRequest(); err != nil {
+				return err
+			}
+		} else {
+			if err := m.inhibitIdle(); err != nil {
+				return err
 			}
 		}
-	}()
-
-	return mod.receive, mod.send, nil
-}
-
-func (mod *IdleModule) stateFunc() error {
-	switch mod.format {
-	case FormatInhibit:
-		err := mod.inhibitIdle()
-		if err != nil {
-			return err
-		}
-	case FormatIdle:
-		err := mod.closeRequest()
-		if err != nil {
-			return err
-		}
-	}
-	return fmt.Errorf("invalid state caught")
-}
-
-func (mod *IdleModule) Render() []modules.EventCell {
-	style := vaxis.Style{
-		Foreground: mod.opts.Fg.Go(),
-		Background: mod.opts.Bg.Go(),
-	}
-	var tlp config.Format
-	switch mod.format {
-	case FormatIdle:
-		tlp = mod.opts.Format
-	case FormatInhibit:
-		tlp = mod.opts.Inhibit.Format
-		style.Foreground = mod.opts.Inhibit.Fg.Go()
-		style.Background = mod.opts.Inhibit.Bg.Go()
-
-	}
-	var buf bytes.Buffer
-	if err := tlp.Execute(&buf, nil); err != nil {
+		m.inhibiting = !m.inhibiting
+		ctx.SetState("inhibiting", m.inhibiting)
 		return nil
-	}
+	})
+	return nil
+}
 
-	chars := vaxis.Characters(buf.String())
-	r := make([]modules.EventCell, len(chars))
-	for i, ch := range chars {
-		r[i] = modules.EventCell{
-			C: vaxis.Cell{
-				Character: ch,
-				Style:     style,
-			},
-			Mod:        mod,
-			MouseShape: mod.opts.Cursor.Go(),
-		}
+func (m *idleModule) Stop(ctx *module.Ctx) {
+	if m.inhibiting {
+		_ = m.closeRequest()
 	}
-	return r
+}
+
+func (m *idleModule) inhibitIdle() error {
+	obj := m.bus.Object(portalBusName, dbus.ObjectPath(portalObjectPath))
+	call := obj.Call(ifaceInhibit+".Inhibit", 0, "", uint32(flagIdle), map[string]dbus.Variant{})
+	if call.Err != nil {
+		return fmt.Errorf("Inhibit call failed: %w", call.Err)
+	}
+	var handle dbus.ObjectPath
+	if err := call.Store(&handle); err != nil {
+		return fmt.Errorf("parse inhibit handle: %w", err)
+	}
+	m.handle = handle
+	return nil
+}
+
+func (m *idleModule) closeRequest() error {
+	req := m.bus.Object(portalBusName, m.handle)
+	if call := req.Call(ifaceRequest+".Close", 0); call.Err != nil {
+		return fmt.Errorf("remove inhibition: %w", call.Err)
+	}
+	return nil
+}
+
+func (m *idleModule) Render(w *module.Writer) {
+	w.Text(module.P{})
 }

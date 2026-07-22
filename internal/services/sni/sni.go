@@ -14,11 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nekorg/pawbar/internal/services"
-	"github.com/nekorg/pawbar/internal/utils"
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/introspect"
 	"github.com/godbus/dbus/v5/prop"
+	"github.com/nekorg/pawbar/internal/utils"
 )
 
 const (
@@ -167,18 +166,6 @@ func (sb *signalBroadcaster) Close() {
 	}
 	sb.listeners = make(map[int]chan *dbus.Signal)
 	sb.mu.Unlock()
-}
-
-func Register() (*Service, bool) {
-	s, ok := services.Ensure("sni", func() services.Service { return &Service{} }).(*Service)
-	return s, ok
-}
-
-func GetService() (*Service, bool) {
-	if s, ok := services.ServiceRegistry["sni"].(*Service); ok {
-		return s, true
-	}
-	return nil, false
 }
 
 func (s *Service) Name() string { return "sni" }

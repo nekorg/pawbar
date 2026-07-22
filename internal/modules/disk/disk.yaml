@@ -1,0 +1,11 @@
+format: "{icon} {used_pct}%"
+tick: 10s
+path: /
+icon: disk
+unit: auto
+use_si: false
+warn_at: 80
+critical_at: 90
+states:
+  warn: { fg: "@warning" }
+  critical: { fg: "@urgent" }

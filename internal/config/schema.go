@@ -1,0 +1,264 @@
+// Copyright (c) 2025 Nekorg All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+//
+// SPDX-License-Identifier: bsd
+
+package config
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// File is a parsed (but not yet compiled) pawbar.yaml.
+type File struct {
+	Bar    BarSettings
+	Theme  Theme
+	Left   []ModuleEntry
+	Middle []ModuleEntry
+	Right  []ModuleEntry
+
+	Path string
+}
+
+// BarSettings are bar-global options.
+type BarSettings struct {
+	TruncatePriority []string `yaml:"truncate_priority"`
+	EnableEllipsis   *bool    `yaml:"enable_ellipsis"`
+	Ellipsis         string   `yaml:"ellipsis"`
+	Strict           bool     `yaml:"strict"`
+	// Defaults toggles the shipped module-defaults layer bar-wide
+	// (default true); entries can override with their own `defaults:`.
+	Defaults *bool `yaml:"defaults"`
+}
+
+func (b *BarSettings) fillDefaults() {
+	if len(b.TruncatePriority) == 0 {
+		b.TruncatePriority = []string{"right", "left", "middle"}
+	}
+	if b.EnableEllipsis == nil {
+		t := true
+		b.EnableEllipsis = &t
+	}
+	if b.Ellipsis == "" {
+		b.Ellipsis = "…"
+	}
+}
+
+func (b *BarSettings) validate(n *yaml.Node, issues *Issues) {
+	if len(b.TruncatePriority) != 3 {
+		issues.add("bar.truncate_priority", n,
+			"exactly 3 anchors needed, %d provided", len(b.TruncatePriority))
+		return
+	}
+	set := map[string]bool{"left": false, "middle": false, "right": false}
+	for _, a := range b.TruncatePriority {
+		if _, ok := set[a]; !ok {
+			issues.add("bar.truncate_priority", n,
+				`invalid anchor %q, valid options are: ["left", "middle", "right"]`, a)
+			return
+		}
+		if set[a] {
+			issues.add("bar.truncate_priority", n, "%q listed twice", a)
+			return
+		}
+		set[a] = true
+	}
+}
+
+// Theme holds user variables and bar-wide defaults.
+type Theme struct {
+	Vars map[string]string
+	// Defaults is the raw `theme.defaults` mapping: Block keys plus an
+	// optional `states:` mapping of Blocks. Kept as a node until compile.
+	Defaults *yaml.Node
+}
+
+// ModuleEntry is one item in a left/middle/right list: a bare name or a
+// single-key mapping of name to its options node.
+type ModuleEntry struct {
+	Name string
+	Node *yaml.Node // nil when the entry is a bare name
+	Line int
+	Col  int
+}
+
+var topLevelKeys = []string{"bar", "theme", "left", "middle", "right"}
+
+// Load parses config bytes into a File, collecting Issues instead of
+// stopping at the first problem. The returned File is usable (with
+// defaults) even when issues exist.
+func Load(data []byte, path string) (*File, Issues) {
+	var issues Issues
+	f := &File{Path: path}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		issues.add("", nil, "invalid yaml: %v", err)
+		f.Bar.fillDefaults()
+		return f, issues
+	}
+	if len(doc.Content) == 0 { // empty file
+		f.Bar.fillDefaults()
+		return f, issues
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		issues.add("", root, "top level must be a mapping")
+		f.Bar.fillDefaults()
+		return f, issues
+	}
+
+	var barNode *yaml.Node
+	for k, v := range mappingPairs(root) {
+		if isNull(v) { // `left:` with nothing under it is an empty section
+			continue
+		}
+		switch k.Value {
+		case "bar":
+			barNode = v
+			if err := v.Decode(&f.Bar); err != nil {
+				issues.add("bar", v, "%s", yamlErr(err))
+			}
+			checkKeys(v, "bar", tagsOf(BarSettings{}), &issues)
+		case "theme":
+			parseTheme(v, &f.Theme, &issues)
+		case "left":
+			f.Left = parseEntries(v, "left", &issues)
+		case "middle":
+			f.Middle = parseEntries(v, "middle", &issues)
+		case "right":
+			f.Right = parseEntries(v, "right", &issues)
+		default:
+			issues.addHint("", k, didYouMean(k.Value, topLevelKeys),
+				"unknown key %q", k.Value)
+		}
+	}
+
+	f.Bar.fillDefaults()
+	f.Bar.validate(barNode, &issues)
+
+	// Substitute @vars everywhere they can appear.
+	if len(f.Theme.Vars) > 0 {
+		expandVars(f.Theme.Defaults, f.Theme.Vars)
+		for _, side := range [][]ModuleEntry{f.Left, f.Middle, f.Right} {
+			for _, e := range side {
+				expandVars(e.Node, f.Theme.Vars)
+			}
+		}
+	}
+	return f, issues
+}
+
+// Read loads and parses the config file at path.
+func Read(path string) (*File, Issues) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		var issues Issues
+		issues.add("", nil, "cannot read config: %v", err)
+		f := &File{Path: path}
+		f.Bar.fillDefaults()
+		return f, issues
+	}
+	return Load(data, path)
+}
+
+func parseTheme(n *yaml.Node, t *Theme, issues *Issues) {
+	if n.Kind != yaml.MappingNode {
+		issues.add("theme", n, "theme must be a mapping")
+		return
+	}
+	for k, v := range mappingPairs(n) {
+		if isNull(v) {
+			continue
+		}
+		switch k.Value {
+		case "vars":
+			if err := v.Decode(&t.Vars); err != nil {
+				issues.add("theme.vars", v, "%s", yamlErr(err))
+			}
+		case "defaults":
+			t.Defaults = v
+		default:
+			issues.addHint("theme", k, didYouMean(k.Value, []string{"vars", "defaults"}),
+				"unknown key %q", k.Value)
+		}
+	}
+}
+
+func parseEntries(n *yaml.Node, side string, issues *Issues) []ModuleEntry {
+	if n.Kind != yaml.SequenceNode {
+		issues.add(side, n, "%s must be a list of modules", side)
+		return nil
+	}
+	out := make([]ModuleEntry, 0, len(n.Content))
+	for i, item := range n.Content {
+		path := fmt.Sprintf("%s[%d]", side, i)
+		switch item.Kind {
+		case yaml.ScalarNode:
+			out = append(out, ModuleEntry{Name: item.Value, Line: item.Line, Col: item.Column})
+		case yaml.MappingNode:
+			if len(item.Content) != 2 {
+				issues.add(path, item,
+					"a module entry must be a bare name or a single `name: {options}` mapping")
+				continue
+			}
+			out = append(out, ModuleEntry{
+				Name: item.Content[0].Value,
+				Node: item.Content[1],
+				Line: item.Content[0].Line,
+				Col:  item.Content[0].Column,
+			})
+		default:
+			issues.add(path, item, "invalid module entry")
+		}
+	}
+	return out
+}
+
+// expandVars replaces scalar values of the form "@name" with the value of
+// theme.vars.name, recursively. Unmatched @refs are left for downstream
+// parsing (built-in color names like @urgent live there).
+func expandVars(n *yaml.Node, vars map[string]string) {
+	if n == nil {
+		return
+	}
+	if n.Kind == yaml.ScalarNode && strings.HasPrefix(n.Value, "@") {
+		if v, ok := vars[strings.TrimPrefix(n.Value, "@")]; ok {
+			n.Value = v
+			n.Tag = "!!str"
+		}
+		return
+	}
+	for _, c := range n.Content {
+		expandVars(c, vars)
+	}
+}
+
+// mappingPairs iterates a mapping node's key/value node pairs.
+func mappingPairs(n *yaml.Node) func(yield func(*yaml.Node, *yaml.Node) bool) {
+	return func(yield func(*yaml.Node, *yaml.Node) bool) {
+		if n == nil || n.Kind != yaml.MappingNode {
+			return
+		}
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if !yield(n.Content[i], n.Content[i+1]) {
+				return
+			}
+		}
+	}
+}
+
+// isNull reports whether a node is yaml null (an empty section).
+func isNull(n *yaml.Node) bool {
+	return n == nil || (n.Kind == yaml.ScalarNode && n.Tag == "!!null")
+}
+
+// yamlErr strips yaml.v3's "yaml: " prefix so issues read cleanly.
+func yamlErr(err error) string {
+	return strings.TrimPrefix(err.Error(), "yaml: ")
+}

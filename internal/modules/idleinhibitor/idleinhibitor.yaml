@@ -1,0 +1,5 @@
+format: "󰛐"
+states:
+  inhibiting: { format: "󰛑" }
+on:
+  left: toggle

@@ -1,0 +1,6 @@
+format: "󰫔"
+states:
+  playing: { format: " {artists}  {title}" }
+  paused: { format: " {artists}  {title}" }
+on:
+  left: play-pause

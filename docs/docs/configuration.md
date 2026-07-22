@@ -5,219 +5,231 @@ next:
 ---
 # Configuration
 
-Configuration file is divided into 4 sections:
-- `bar`: used for general bar configuration
-- `left`: left anchored modules
-- `middle`: centered modules
-- `right`: right anchored modules
+pawbar reads `~/.config/pawbar/pawbar.yaml` (override with `PAWBAR_CONFIG` or
+`--config`). The file is hot-reloaded: save it and the bar updates in place.
+
+A config has five top-level sections, all optional:
+
+```yaml
+bar:      # bar-global settings
+theme:    # variables and bar-wide default styling
+left:     # modules anchored left
+middle:   # modules centered
+right:    # modules anchored right
+```
+
+Every problem in the config is reported with its file position and a
+"did you mean" hint. By default a broken module entry renders as an error
+chip (`⚠name`) while the rest of the bar runs; set `bar.strict: true`
+(or pass `--strict`) to refuse to start instead. `pawbar --check`
+validates the config and exits; `pawbar --resolved` prints the fully
+merged per-slot configuration for cascade debugging.
 
 # `bar`
-Has three options:
-- `truncate_priority`
-- `enable_ellipsis`
-- `ellipsis`
-## `truncate_priority`
-Sets content priority on overlap between anchored modules.
 
-Default:
 ```yaml
-truncate_priority:
-  - right
-  - left
-  - middle
+bar:
+  truncate_priority: [right, left, middle]
+  enable_ellipsis: true
+  ellipsis: "…"
+  strict: false
+  defaults: true
 ```
 
-For example, in the config
+- `truncate_priority`: which anchors keep their content when the bar
+  overflows; earlier wins. Must list all three.
+- `enable_ellipsis` / `ellipsis`: mark truncation points.
+- `strict`: any config issue aborts startup (and rejects hot reloads).
+- `defaults`: set `false` to drop every module's
+  [shipped defaults](#shipped-defaults) bar-wide.
+
+# `theme`
+
 ```yaml
-left:
-  - title
-middle:
-  - clock
+theme:
+  vars:
+    accent: "#7aa2f7"
+    warn: orange
+  defaults:
+    fg: "@accent"
+    bold: false
+    states:
+      hover: { bold: true }     # applies to every module's hover
 ```
 
-if the content of the title reaches clock then by default clock will be under the title.
-
-one set of anchor can be given priority over the other with this
-
-## `enable_ellipsis`
-Enables adding ellipsis inside truncated content
-
-Adds ellipsis at the point of overlap. The ellipsis uses the space of the anchor being truncated.
-
-Default:
-```yaml
-enable_ellipsis: true
-```
-
-## `ellipsis`
-Sets the ellipsis content.
-
-Default:
-```yaml
-ellipsis: "…"
-```
+- `vars`: named values. Reference them anywhere with `@name`. Built-in
+  color names (`@urgent`, `@good`, `@color112`, ...) still work where your
+  vars don't shadow them.
+- `defaults`: a [block](#blocks-style--format) applied to every module,
+  plus per-state blocks under `states:`.
 
 # Modules
 
-There are **16** modules currently:
-- `backlight`
-- `battery`
-- `bluetooth`
-- `clock`
-- `cpu`
-- `custom`
-- `disk`
-- `idleInhibitor`
-- `locale`
-- `mpris`
-- `ram`
-- `title`
-- `tray`
-- `volume`
-- `wifi`
-- `ws`
+Each side is a list. An entry is a bare name or a `name: {options}`
+mapping:
 
-
-Each module must be anchored in one of **3** ways:
-- `left`
-- `middle`
-- `right`
-
-like this in config file:
 ```yaml
 left:
   - ws
-  - title
-middle:
-  - clock
-right:
-  - tray
   - sep
-  - disk
+middle:
+  - clock:
+      format: "{time:%H:%M}"
+right:
+  - volume
 ```
 
-The modules are listed in a way such that top maps to left and bottom maps to right.\
-So in the example above, tray will be the leftmost module in the right anchor and disk be the rightmost
+`sep` and `space` are static separator modules.
 
-Each modules has some configuration options, but some common configuration options are available in most modules like:
-- `fg`
-- `bg`
-- `format`
-- `cursor`
-- `onmouse`
+## Shipped defaults
 
-## `fg`
-Set foreground color.
-\
-Changes color for text, icons, etc
+A module's default configuration is not baked into code: every module
+ships a small yaml file, in exactly this config syntax, that forms the
+bottom layer of its cascade. A bare `- ws` entry gets exactly the
+contents of that file; nothing more. Empty config means an empty bar,
+and everything the bar does is written down somewhere you can read:
 
-Example:
-```yaml
-fg: aliceblue
+```sh
+pawbar defaults            # list modules
+pawbar defaults ws         # print ws's shipped defaults verbatim
 ```
 
-### Colors
-Colors can set using **4** different methods:
-- [CSS Named Colors](https://developer.mozilla.org/en-US/docs/Web/CSS/named-color): Set the name directly like `fg: rebeccapurple`
-- Hex Codes: `fg: #1A553B` or `fg: #FFF`
-- RGB Codes: `fg: rgb(234,98,102)`
-- Predefined Variables: `fg: @urgent`, `fg: @good`, `fg: @color112` 
-
-## `bg`
-Set background color.
-
-Example:
-```yaml
-bg: saddlebrown
-```
-
-Refer [Colors](#colors) for how to set colors
-
-## `format`
-Sets display format for the module
-
-Apart from `clock`, most modules uses go's [text/template format syntax](https://pkg.go.dev/text/template)
-
-For basic configuration it is enough to know, each module has its set of keywords, like `backlight` may have:
-- `Icon`: icon
-- `Percent`: percent of backlight
-- `Now`: current brightness units
-- `Max`: maximum brightness units
-
-Now, these can be escaped using the syntax <code>&#123;&#123;.Keyword}}</code> \
-Examples:
-```yaml
-format: "{{.Icon}} {{.Percent}}%" 
-```
+You control the whole layer:
 
 ```yaml
-format: "hallo: {{.Icon}}: {{.Now}}/{{.Max}}"
+- ws:
+    on:
+      left: ~              # unbind a shipped binding: null removes it
+    states:
+      active: ~            # drop a shipped state's styling entirely
+
+- clock: { defaults: false }   # start this entry from a blank slate
 ```
 
-templates are really powerful and you can do a bunch of cool stuff with it. Check out the link above to know more.
+With `defaults: false` (per entry, or bar-wide under `bar:`) nothing is
+inherited and the entry becomes fully manual: a module that renders
+placeholders requires an explicit `format`, and every option the module
+declares (`tick`, `warn_at`, ...) must be set. Anything missing is a
+config error listing exactly which keys are absent.
 
-## `cursor`
-Sets cursor shown while hovering over the module.
+## Blocks (style + format)
+
+A *block* is the styling surface every module shares. All keys are
+optional; unset keys inherit from the layer below.
+
+| key | meaning |
+|---|---|
+| `fg`, `bg` | colors: CSS names, `#hex`, `rgb(r,g,b)`, `@var` |
+| `bold`, `dim`, `italic`, `underline`, `blink`, `reverse`, `strikethrough` | booleans |
+| `cursor` | pointer shape while hovering ([CSS cursor names](https://developer.mozilla.org/en-US/docs/Web/CSS/cursor)) |
+| `format` | placeholder format string (see below) |
+| `template` | opt-in Go `text/template` alternative to `format` |
+
+Block keys go directly at the top level of a module entry:
 
 ```yaml
-cursor: pointer
+- clock:
+    fg: "@accent"
+    format: "{time:%H:%M}"
 ```
 
-Available cursor shapes can be referred from [here](https://developer.mozilla.org/en-US/docs/Web/CSS/cursor)
+## Format strings
 
-## onmouse
-Sets dynamic behavior on mouse interaction
+`format` uses placeholders: `{name}` inserts a value the module
+provides, `{name:spec}` formats it. Unknown placeholder names are config
+errors, so typos are caught at load time.
 
-Supports setting behaviour on 7 types of mouse interaction:
-- `left`: Left click
-- `right`: Right click
-- `middle`: Middle click
-- `wheel-up`: Scroll up (touchpad or mouse)
-- `wheel-down`: Scroll down
-- `wheel-left`: Scroll left
-- `wheel-right`: Scroll right
-- `hover`: Hover over the module, only triggers when you enter the module space
+- Time values take a strftime layout: `{time:%A %d %B}`.
+- Numbers take a printf spec without the `%`: `{vol:3}` pads to 3,
+  `{load:.2f}` renders two decimals.
+- <code>&#123;&#123;</code> and <code>&#125;&#125;</code> are literal braces.
 
-Each type of interaction has **3** actions it can perform when triggered:
-- `run`: Execute a command
-- `notify`: Send a desktop notification
-- `config`: Change config dynamically
+Each module's placeholders are listed in the [module reference](/docs/modules).
 
-### `run`
-Execute a command
+Power users can set `template` instead: a Go `text/template` over the
+same values (<code>&#123;&#123;.vol&#125;&#125;</code>), with `round` and `strftime` helper functions.
+`format` and `template` are mutually exclusive per block.
 
-Example:
+## States
+
+Modules expose named *condition states* they turn on and off themselves
+(`muted`, `charging`, `high`, ...). A state carries a block that overrides
+the base styling while active:
+
 ```yaml
-onmouse:
-  left:
-    run: "pavucontrol"
+- volume:
+    format: "{icon} {vol}%"
+    states:
+      muted: { fg: "@warn", format: "{icon} --" }
 ```
 
-### `notify`
-Send a desktop notification
+States can also override module options, not just styling. A state that
+sets `tick: 1m` on the clock changes the refresh rate while active.
 
-Example:
+You can also invent *user states* and toggle them from mouse bindings;
+that's how "click to switch format" works:
+
 ```yaml
-onmouse:
-  middle:
-    notify: "Hey I am pawbar."
+- clock:
+    format: "{time:%H:%M}"
+    states:
+      full: { format: "{time:%A %d %B %H:%M:%S}" }
+    on:
+      left: { cycle: [full] }
 ```
 
-### `config`
-List of configs for this module to cycle through each time this type of interaction is triggered.
+Two built-in states always exist: `hover` (pointer over the module) and
+`pressed` (button held).
 
-Example:
+### Merge priority
+
+Low to high; later layers override earlier ones per key:
+
+1. the module's [shipped defaults](#shipped-defaults) file
+2. `theme.defaults`
+3. the entry's top-level block keys
+4. active states, in order: condition states (module declaration order),
+   user states, `hover`, `pressed`. Each state's block is itself merged
+   from the shipped defaults' `states.<s>`, then
+   `theme.defaults.states.<s>`, then the entry's `states.<s>`.
+
+## `on:` mouse bindings
+
 ```yaml
-onmouse:
-  left:
-    config:
-      - fg: blue # conf 1
-        bg: green
-      - fg: red # conf 2
-        bg: white
+on:
+  left: toggle-mute              # a module verb (shorthand)
+  right: { run: "pavucontrol" }
+  middle: { notify: "hello" }
+  scroll-up: volume-up
+  hover: { set: expanded }       # state held while hovering
 ```
 
-On each left click, this will cycle through the base config, conf 1, conf 2
+Buttons: `left`, `right`, `middle`, `scroll-up`, `scroll-down`,
+`scroll-left`, `scroll-right`, plus `hover`. A binding is one action or
+a list of actions:
 
-Each module will have its set of allowed config options in onmouse interactions, but most will have atleast `fg`, `bg`, `format`, `cursor`
+- `verb`: invoke a named action the module implements (bare strings are
+  verb shorthand). Unknown verb names are config errors.
+- `run`: spawn a command (string or argv list).
+- `notify`: send a desktop notification.
+- `set`: toggle a user state.
+- `cycle`: cycle through user states: none, first, ..., last, none.
 
+Shipped defaults may carry bindings (volume's scroll adjusts volume,
+clock's right-click opens the calendar); they are plain `on:` entries in
+the module's defaults file, visible via `pawbar defaults <name>`. An
+`on:` key for the same button replaces the shipped one, and binding a
+button to `~` (null) removes it.
+
+# Hot reload
+
+Editing the config applies it live:
+
+- unchanged entries keep running untouched,
+- a changed entry is reconfigured in place when the module supports it,
+  restarted otherwise,
+- theme changes restyle everything without restarts,
+- a file that fails to parse is ignored (last good config stays) and the
+  error is logged.
+
+Reordering entries restarts the moved modules; diffing is positional.

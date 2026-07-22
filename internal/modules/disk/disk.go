@@ -7,153 +7,68 @@
 package disk
 
 import (
-	"bytes"
+	"math"
 	"time"
 
-	"git.sr.ht/~rockorager/vaxis"
-	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/internal/lookup/units"
-	"github.com/nekorg/pawbar/internal/modules"
-	"github.com/nekorg/pawbar/internal/utils"
+	"github.com/nekorg/pawbar/pkg/module"
 	"github.com/shirou/gopsutil/v3/disk"
 )
 
-type DiskModule struct {
-	receive               chan bool
-	send                  chan modules.Event
-	opts                  Options
-	initialOpts           Options
-	currentTickerInterval time.Duration
-	ticker                *time.Ticker
+type diskModule struct {
+	opts   *Options
+	ticker *module.Ticker
+
+	used, free, total uint64
 }
 
-func (mod *DiskModule) Dependencies() []string { return nil }
-
-func (mod *DiskModule) Run() (<-chan bool, chan<- modules.Event, error) {
-	mod.receive = make(chan bool)
-	mod.send = make(chan modules.Event)
-	mod.initialOpts = mod.opts
-
-	go func() {
-		mod.currentTickerInterval = mod.opts.Tick.Go()
-		mod.ticker = time.NewTicker(mod.currentTickerInterval)
-		defer mod.ticker.Stop()
-
-		for {
-			select {
-			case <-mod.ticker.C:
-				mod.receive <- true
-			case e := <-mod.send:
-				switch ev := e.VaxisEvent.(type) {
-				case vaxis.Mouse:
-					if ev.EventType != vaxis.EventPress {
-						break
-					}
-					btn := config.ButtonName(ev)
-					if mod.opts.OnClick.Dispatch(btn, &mod.initialOpts, &mod.opts) {
-						mod.receive <- true
-					}
-					mod.ensureTickInterval()
-				case modules.FocusIn:
-					if mod.opts.OnClick.HoverIn(&mod.opts) {
-						mod.receive <- true
-					}
-					mod.ensureTickInterval()
-				case modules.FocusOut:
-					if mod.opts.OnClick.HoverOut(&mod.opts) {
-						mod.receive <- true
-					}
-					mod.ensureTickInterval()
-				}
-			}
-		}
-	}()
-
-	return mod.receive, mod.send, nil
-}
-
-func (mod *DiskModule) ensureTickInterval() {
-	if d := mod.opts.Tick.Go(); d != mod.currentTickerInterval {
-		mod.currentTickerInterval = d
-		mod.ticker.Reset(d)
-	}
-}
-
-func pickThreshold(p int, th []ThresholdOptions) *ThresholdOptions {
-	for _, t := range th {
-		matchUp := t.Direction.IsUp() && p >= t.Percent.Go()
-		matchDown := !t.Direction.IsUp() && p <= t.Percent.Go()
-		if matchUp || matchDown {
-			return &t
-		}
-	}
+func (m *diskModule) Init(ctx *module.Ctx) error {
+	m.opts = ctx.Options().(*Options)
+	m.ticker = module.NewTicker(m.opts.Tick.Go())
+	m.sample(ctx)
+	module.On(ctx, m.ticker.Source(), func(time.Time) { m.sample(ctx) })
 	return nil
 }
 
-func (mod *DiskModule) Render() []modules.EventCell {
-	du, err := disk.Usage("/")
+func (m *diskModule) OnState(ctx *module.Ctx) {
+	m.opts = ctx.Options().(*Options)
+	m.ticker.Set(m.opts.Tick.Go())
+}
+
+func (m *diskModule) sample(ctx *module.Ctx) {
+	du, err := disk.Usage(m.opts.Path)
 	if err != nil {
-		return nil
+		ctx.Log("usage %s: %v", m.opts.Path, err)
+		return
 	}
+	m.used, m.free, m.total = du.Used, du.Free, du.Total
+	pct := int(du.UsedPercent)
+	ctx.SetState("warn", pct >= m.opts.WarnAt.Go() && pct < m.opts.CriticalAt.Go())
+	ctx.SetState("critical", pct >= m.opts.CriticalAt.Go())
+}
 
-	usedPercent := int(du.UsedPercent)
-	freePercent := 100 - usedPercent
-
+func (m *diskModule) Render(w *module.Writer) {
 	system := units.IEC
-	if mod.opts.UseSI {
+	if m.opts.UseSI {
 		system = units.SI
 	}
-
-	unit := mod.opts.Scale.Unit
-	if mod.opts.Scale.Dynamic || mod.opts.Scale.Unit.Name == "" {
-		unit = units.Choose(du.Total, system)
+	unit := m.opts.Scale.Unit
+	if m.opts.Scale.Dynamic || unit.Name == "" {
+		unit = units.Choose(m.total, system)
 	}
-
-	usedAbs := units.Format(du.Used, unit)
-	freeAbs := units.Format(du.Free, unit)
-	totalAbs := units.Format(du.Total, unit)
-
-	usage := usedPercent
-	style := vaxis.Style{}
-
-	t := pickThreshold(usage, mod.opts.Thresholds)
-
-	if t != nil {
-		style.Foreground = t.Fg.Go()
-		style.Background = t.Bg.Go()
-	} else {
-		style.Foreground = mod.opts.Fg.Go()
-		style.Background = mod.opts.Bg.Go()
+	pct := 0
+	if m.total > 0 {
+		pct = int(float64(m.used) * 100 / float64(m.total))
 	}
-
-	var buf bytes.Buffer
-	err = mod.opts.Format.Execute(&buf, struct {
-		Used, Free, Total        float64
-		UsedPercent, FreePercent int
-		Unit, Icon               string
-	}{
-		usedAbs, freeAbs, totalAbs,
-		usedPercent, freePercent,
-		unit.Name, mod.opts.Icon.Go(),
+	w.Text(module.P{
+		"icon":     m.opts.Icon.Go(),
+		"used":     round2(units.Format(m.used, unit)),
+		"free":     round2(units.Format(m.free, unit)),
+		"total":    round2(units.Format(m.total, unit)),
+		"used_pct": pct,
+		"free_pct": 100 - pct,
+		"unit":     unit.Name,
 	})
-	if err != nil {
-		utils.Logger.Printf("fixme: disk: template error: %v\n", err)
-	}
-
-	rch := vaxis.Characters(buf.String())
-	out := make([]modules.EventCell, len(rch))
-	for i, ch := range rch {
-		out[i] = modules.EventCell{
-			C:          vaxis.Cell{Character: ch, Style: style},
-			Mod:        mod,
-			MouseShape: mod.opts.Cursor.Go(),
-		}
-	}
-	return out
 }
 
-func (mod *DiskModule) Channels() (<-chan bool, chan<- modules.Event) {
-	return mod.receive, mod.send
-}
-
-func (mod *DiskModule) Name() string { return "disk" }
+func round2(v float64) float64 { return math.Round(v*100) / 100 }

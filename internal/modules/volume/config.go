@@ -7,61 +7,37 @@
 package volume
 
 import (
-	"text/template"
+	_ "embed"
 
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/lookup/colors"
-	"github.com/nekorg/pawbar/internal/modules"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-func init() {
-	config.RegisterModule("volume", defaultOptions, func(o Options) (modules.Module, error) { return &VolumeModule{opts: o}, nil })
-}
-
-type Mutedoptions struct {
-	MuteFormat string       `yaml:"muteformat"`
-	Fg         config.Color `yaml:"fg"`
-	Bg         config.Color `yaml:"bg"`
-}
+//go:embed volume.yaml
+var defaults []byte
 
 type Options struct {
-	Fg      config.Color                      `yaml:"fg"`
-	Bg      config.Color                      `yaml:"bg"`
-	Cursor  config.Cursor                     `yaml:"cursor"`
-	Format  config.Format                     `yaml:"format"`
-	Muted   Mutedoptions                      `yaml:"muted"`
-	Icons   []rune                            `yaml:"icons"`
-	OnClick config.MouseActions[MouseOptions] `yaml:"onmouse"`
+	Icons []string       `yaml:"icons"`
+	Step  module.Percent `yaml:"step"`
 }
 
-type MouseOptions struct {
-	Fg     *config.Color  `yaml:"fg"`
-	Bg     *config.Color  `yaml:"bg"`
-	Cursor *config.Cursor `yaml:"cursor"`
-	Format *config.Format `yaml:"format"`
-	// Icons  *[]rune        `yaml:"icons"`
-}
-
-func defaultOptions() Options {
-	fv, _ := template.New("format").Parse("{{.Icon}} {{.Percent}}%")
-	muteColor, _ := colors.ParseColor("darkgray")
-
-	return Options{
-		Format: config.Format{Template: fv},
-		Icons:  []rune{'󰕿', '󰖀', '󰕾'},
-		Muted: Mutedoptions{
-			MuteFormat: "󰖁 MUTED",
-			Fg:         config.Color(muteColor),
+func init() {
+	module.Register(module.Def{
+		Name:    "volume",
+		Doc:     "default-sink volume via pulseaudio/pipewire",
+		New:     func() module.Module { return &volumeModule{} },
+		Options: func() any { return &Options{} },
+		States: []module.StateDef{
+			{Name: "muted", Doc: "the default sink is muted"},
 		},
-		OnClick: config.MouseActions[MouseOptions]{
-			Actions: map[string]*config.MouseAction[MouseOptions]{
-				"wheel-up": {
-					Run: []string{"pactl", "set-sink-volume", "@DEFAULT_SINK@", "+5%"},
-				},
-				"wheel-down": {
-					Run: []string{"pactl", "set-sink-volume", "@DEFAULT_SINK@", "-5%"},
-				},
-			},
+		Placeholders: []module.Placeholder{
+			{Name: "icon", Doc: "volume level icon", Kind: module.KindString},
+			{Name: "vol", Doc: "volume percentage", Kind: module.KindNumber},
 		},
-	}
+		Verbs: []module.VerbDef{
+			{Name: "toggle-mute", Doc: "mute/unmute the default sink"},
+			{Name: "volume-up", Doc: "raise volume by `step`"},
+			{Name: "volume-down", Doc: "lower volume by `step`"},
+		},
+		Defaults: defaults,
+	})
 }

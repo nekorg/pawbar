@@ -1,0 +1,8 @@
+format: "󰐦"
+states:
+  performance: { format: "󰓅" }
+  balanced: { format: "󰾅" }
+  power-saver: { format: "󰾆" }
+on:
+  left: toggle
+  right: menu

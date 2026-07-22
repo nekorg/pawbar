@@ -7,82 +7,43 @@
 package disk
 
 import (
-	"time"
+	_ "embed"
 
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/lookup/colors"
-	"github.com/nekorg/pawbar/internal/lookup/icons"
-	"github.com/nekorg/pawbar/internal/modules"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-func init() {
-	config.RegisterModule("disk", defaultOptions, func(o Options) (modules.Module, error) { return &DiskModule{opts: o}, nil })
-}
-
-type ThresholdOptions struct {
-	Percent   config.Percent   `yaml:"percent"`
-	Direction config.Direction `yaml:"direction"`
-	Fg        config.Color     `yaml:"fg"`
-	Bg        config.Color     `yaml:"bg"`
-}
+//go:embed disk.yaml
+var defaults []byte
 
 type Options struct {
-	Fg     config.Color    `yaml:"fg"`
-	Bg     config.Color    `yaml:"bg"`
-	Cursor config.Cursor   `yaml:"cursor"`
-	Tick   config.Duration `yaml:"tick"`
-	Format config.Format   `yaml:"format"`
-	Icon   config.Icon     `yaml:"icon"`
-
-	UseSI bool         `yaml:"use_si"`
-	Scale config.Scale `yaml:"unit"`
-
-	Thresholds []ThresholdOptions `yaml:"thresholds"`
-
-	OnClick config.MouseActions[MouseOptions] `yaml:"onmouse"`
+	Tick       module.Duration `yaml:"tick"`
+	Path       string          `yaml:"path"`
+	Icon       module.Icon     `yaml:"icon"`
+	UseSI      bool            `yaml:"use_si"`
+	Scale      module.Scale    `yaml:"unit"`
+	WarnAt     module.Percent  `yaml:"warn_at"`
+	CriticalAt module.Percent  `yaml:"critical_at"`
 }
 
-type MouseOptions struct {
-	Fg     *config.Color    `yaml:"fg"`
-	Bg     *config.Color    `yaml:"bg"`
-	Cursor *config.Cursor   `yaml:"cursor"`
-	Tick   *config.Duration `yaml:"tick"`
-	Format *config.Format   `yaml:"format"`
-	Icon   *config.Icon     `yaml:"icon"`
-
-	UseSI *bool         `yaml:"use_si"`
-	Scale *config.Scale `yaml:"scale"`
-}
-
-func defaultOptions() Options {
-	icon, _ := icons.Lookup("disk")
-	f0, _ := config.NewTemplate("{{.Icon}} {{.UsedPercent}}%")
-	f1, _ := config.NewTemplate("{{.Icon}} {{.Used | round 2}}/{{.Total | round 2}} {{.Unit}}")
-	urgClr, _ := colors.ParseColor("@urgent")
-	warClr, _ := colors.ParseColor("@warning")
-	return Options{
-		Format: config.Format{Template: f0},
-		Tick:   config.Duration(10 * time.Second),
-		UseSI:  false,
-		Icon:   config.Icon(icon),
-		Thresholds: []ThresholdOptions{
-			{
-				Percent:   80,
-				Direction: config.Direction(true),
-				Fg:        config.Color(warClr),
-			},
-			{
-				Percent:   90,
-				Direction: config.Direction(true),
-				Fg:        config.Color(urgClr),
-			},
+func init() {
+	module.Register(module.Def{
+		Name:    "disk",
+		Doc:     "filesystem usage for a mountpoint",
+		New:     func() module.Module { return &diskModule{} },
+		Options: func() any { return &Options{} },
+		States: []module.StateDef{
+			{Name: "warn", Doc: "usage at or above warn_at"},
+			{Name: "critical", Doc: "usage at or above critical_at"},
 		},
-		OnClick: config.MouseActions[MouseOptions]{
-			Actions: map[string]*config.MouseAction[MouseOptions]{
-				"left": {
-					Configs: []MouseOptions{{Format: &config.Format{Template: f1}}},
-				},
-			},
+		Placeholders: []module.Placeholder{
+			{Name: "icon", Doc: "module icon", Kind: module.KindString},
+			{Name: "used", Doc: "used space in the selected unit", Kind: module.KindNumber},
+			{Name: "free", Doc: "free space in the selected unit", Kind: module.KindNumber},
+			{Name: "total", Doc: "total space in the selected unit", Kind: module.KindNumber},
+			{Name: "used_pct", Doc: "used percentage", Kind: module.KindNumber},
+			{Name: "free_pct", Doc: "free percentage", Kind: module.KindNumber},
+			{Name: "unit", Doc: "selected unit name", Kind: module.KindString},
 		},
-	}
+		Defaults: defaults,
+	})
 }

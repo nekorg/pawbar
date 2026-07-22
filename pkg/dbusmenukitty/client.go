@@ -421,7 +421,7 @@ func CreatePanel(x, y, w, h int) *katnip.Panel {
 	}
 
 	kn := katnip.NewPanel("leaf", conf)
-	utils.Logger.Printf(kn.Cmd.String())
+	utils.Logger.Printf("%s", kn.Cmd.String())
 	kn.Start()
 
 	return kn

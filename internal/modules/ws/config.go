@@ -7,71 +7,42 @@
 package ws
 
 import (
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/lookup/colors"
-	"github.com/nekorg/pawbar/internal/modules"
+	_ "embed"
+
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-func init() {
-	config.RegisterModule("ws", defaultOptions, func(o Options) (modules.Module, error) { return &Module{opts: o}, nil })
-}
-
-type ActiveOptions struct {
-	Fg config.Color `yaml:"fg"`
-	Bg config.Color `yaml:"bg"`
-}
-
-type UrgentOptions struct {
-	Fg config.Color `yaml:"fg"`
-	Bg config.Color `yaml:"bg"`
-}
-
-type SpecialOptions struct {
-	Fg config.Color `yaml:"fg"`
-	Bg config.Color `yaml:"bg"`
-}
+//go:embed ws.yaml
+var defaults []byte
 
 type Options struct {
-	Fg      config.Color                      `yaml:"fg"`
-	Bg      config.Color                      `yaml:"bg"`
-	Cursor  config.Cursor                     `yaml:"cursor"`
-	Format  config.Format                     `yaml:"format"`
-	Special SpecialOptions                    `yaml:"special"`
-	Active  ActiveOptions                     `yaml:"active"`
-	Urgent  UrgentOptions                     `yaml:"urgent"`
-	OnClick config.MouseActions[MouseOptions] `yaml:"onmouse"`
+	// CurrentOnly renders only the focused workspace. Toggle it at
+	// runtime with a user state that overrides it, e.g.:
+	//
+	//	states:
+	//	  focus: { current_only: true }
+	//	on:
+	//	  right: { cycle: [focus] }
+	CurrentOnly bool `yaml:"current_only"`
 }
 
-type MouseOptions struct {
-	Fg     *config.Color  `yaml:"fg"`
-	Bg     *config.Color  `yaml:"bg"`
-	Cursor *config.Cursor `yaml:"cursor"`
-	Format *config.Format `yaml:"format"`
-}
-
-func defaultOptions() Options {
-	fw, _ := config.NewTemplate("{{.WSID}}")
-	spclClr, _ := colors.ParseColor("@special")
-	actClr, _ := colors.ParseColor("@active")
-	blkClr, _ := colors.ParseColor("@black")
-	urgClr, _ := colors.ParseColor("@urgent")
-
-	return Options{
-		Format: config.Format{Template: fw},
-		Special: SpecialOptions{
-			Fg: config.Color(actClr),
-			Bg: config.Color(spclClr),
+func init() {
+	module.Register(module.Def{
+		Name:    "ws",
+		Doc:     "workspaces (hyprland, i3/sway); click a workspace to switch",
+		New:     func() module.Module { return &wsModule{} },
+		Options: func() any { return &Options{} },
+		States: []module.StateDef{
+			{Name: "urgent", Doc: "workspace has an urgent window (per segment)"},
+			{Name: "active", Doc: "the focused workspace (per segment)"},
+			{Name: "special", Doc: "a special/scratchpad workspace (per segment)"},
 		},
-		Active: ActiveOptions{
-			Fg: config.Color(blkClr),
-			Bg: config.Color(actClr),
+		Placeholders: []module.Placeholder{
+			{Name: "ws", Doc: "workspace name", Kind: module.KindString},
 		},
-		Urgent: UrgentOptions{
-			Fg: config.Color(blkClr),
-			Bg: config.Color(urgClr),
+		Verbs: []module.VerbDef{
+			{Name: "goto", Doc: "switch to the workspace under the pointer"},
 		},
-		OnClick: config.MouseActions[MouseOptions]{
-			Actions: map[string]*config.MouseAction[MouseOptions]{},
-		},
-	}
+		Defaults: defaults,
+	})
 }

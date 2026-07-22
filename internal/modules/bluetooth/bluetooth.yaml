@@ -1,0 +1,4 @@
+format: "󰂱"
+states:
+  disconnected: { format: "" }
+  off: { fg: darkgray, format: "󰂲" }

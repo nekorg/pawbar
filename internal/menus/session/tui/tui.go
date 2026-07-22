@@ -23,7 +23,7 @@ func Panel(k *katnip.Kitty, rw io.ReadWriter) int {
 
 	conn, obj, err := connect()
 	if err != nil {
-		fmt.Errorf("error in connection: %s", err)
+		fmt.Fprintf(os.Stderr, "error in connection: %s\n", err)
 	}
 	defer conn.Close()
 
@@ -98,7 +98,7 @@ func callTerminate(obj dbus.BusObject) {
 	}
 	call := obj.Call("org.freedesktop.login1.Manager.TerminateSession", 0, sess_id)
 	if call.Err != nil {
-		fmt.Errorf("error in setting session control: %s", call.Err)
+		fmt.Fprintf(os.Stderr, "error in setting session control: %s\n", call.Err)
 	}
 	return
 }
@@ -114,7 +114,7 @@ func setProfile(session string, obj dbus.BusObject) {
 		call = obj.Call("org.freedesktop.login1.Manager.Suspend", 0, true)
 	}
 	if call.Err != nil {
-		fmt.Errorf("error in setting session control: %s", call.Err)
+		fmt.Fprintf(os.Stderr, "error in setting session control: %s\n", call.Err)
 	}
 	return
 }

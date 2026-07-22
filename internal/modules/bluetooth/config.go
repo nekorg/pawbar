@@ -7,65 +7,26 @@
 package bluetooth
 
 import (
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/lookup/colors"
-	"github.com/nekorg/pawbar/internal/modules"
+	_ "embed"
+
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
+//go:embed bluetooth.yaml
+var defaults []byte
+
 func init() {
-	config.RegisterModule("bluetooth", defaultOptions, func(o Options) (modules.Module, error) { return &bluetoothModule{opts: o}, nil })
-}
-
-type NoConnectionOptions struct {
-	Fg     config.Color  `yaml:"fg"`
-	Bg     config.Color  `yaml:"bg"`
-	Format config.Format `yaml:"format"`
-}
-
-type ConnectionOptions struct {
-	Fg     config.Color  `yaml:"fg"`
-	Bg     config.Color  `yaml:"bg"`
-	Format config.Format `yaml:"format"`
-}
-
-type Options struct {
-	Fg           config.Color                      `yaml:"fg"`
-	Bg           config.Color                      `yaml:"bg"`
-	Cursor       config.Cursor                     `yaml:"cursor"`
-	Format       config.Format                     `yaml:"format"`
-	Connection   ConnectionOptions                 `yaml:"connection"`
-	NoConnection NoConnectionOptions               `yaml:"noconnection"`
-	OnClick      config.MouseActions[MouseOptions] `yaml:"onmouse"`
-}
-
-type MouseOptions struct {
-	Fg     *config.Color  `yaml:"fg"`
-	Bg     *config.Color  `yaml:"bg"`
-	Cursor *config.Cursor `yaml:"cursor"`
-	Format *config.Format `yaml:"format"`
-}
-
-func defaultOptions() Options {
-	fd, _ := config.NewTemplate("󰂱")
-	fc, _ := config.NewTemplate("")
-	fn, _ := config.NewTemplate("󰂲")
-	fa, _ := config.NewTemplate("󰂱 {{.Device}}")
-	noConClr, _ := colors.ParseColor("darkgray")
-	return Options{
-		Format: config.Format{Template: fd},
-		NoConnection: NoConnectionOptions{
-			Format: config.Format{Template: fn},
-			Fg:     config.Color(noConClr),
+	module.Register(module.Def{
+		Name: "bluetooth",
+		Doc:  "bluetooth adapter/device status via bluez",
+		New:  func() module.Module { return &bluetoothModule{} },
+		States: []module.StateDef{
+			{Name: "disconnected", Doc: "adapter powered, no device connected"},
+			{Name: "off", Doc: "adapter is powered off"},
 		},
-		Connection: ConnectionOptions{
-			Format: config.Format{Template: fc},
+		Placeholders: []module.Placeholder{
+			{Name: "device", Doc: "connected device name", Kind: module.KindString},
 		},
-		OnClick: config.MouseActions[MouseOptions]{
-			Actions: map[string]*config.MouseAction[MouseOptions]{
-				"left": {
-					Configs: []MouseOptions{{Format: &config.Format{Template: fa}}},
-				},
-			},
-		},
-	}
+		Defaults: defaults,
+	})
 }

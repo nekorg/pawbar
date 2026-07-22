@@ -1,0 +1,5 @@
+format: "{icon} {light}%"
+icons: ["󰃞", "󰃟", "󰃝", "󰃠"]
+on:
+  scroll-up: { run: "brightnessctl set +5%" }
+  scroll-down: { run: "brightnessctl set 5%-" }

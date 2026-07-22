@@ -1,0 +1,10 @@
+format: "{icon} {bat}%"
+discharging_icons: ["󰂃", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
+charging_icons: ["󰢟", "󰢜", "󰂆", "󰂇", "󰂈", "󰢝", "󰂉", "󰢞", "󰂊", "󰂋", "󰂅"]
+charged_icon: "󱟢"
+warn_at: 30
+low_at: 15
+states:
+  warn: { fg: "@warning" }
+  low: { fg: "@urgent" }
+  hover: { format: "{hours} hrs {minutes} mins" }

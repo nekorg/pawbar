@@ -7,45 +7,30 @@
 package backlight
 
 import (
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/modules"
+	_ "embed"
+
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-func init() {
-	config.RegisterModule("backlight", defaultOptions, func(o Options) (modules.Module, error) { return &Backlight{opts: o}, nil })
-}
+//go:embed backlight.yaml
+var defaults []byte
 
 type Options struct {
-	Fg      config.Color                      `yaml:"fg"`
-	Bg      config.Color                      `yaml:"bg"`
-	Cursor  config.Cursor                     `yaml:"cursor"`
-	Format  config.Format                     `yaml:"format"`
-	Icons   []rune                            `yaml:"icons"`
-	OnClick config.MouseActions[MouseOptions] `yaml:"onmouse"`
+	Icons []string `yaml:"icons"`
 }
 
-type MouseOptions struct {
-	Fg     *config.Color  `yaml:"fg"`
-	Bg     *config.Color  `yaml:"bg"`
-	Cursor *config.Cursor `yaml:"cursor"`
-	Format *config.Format `yaml:"format"`
-}
-
-func defaultOptions() Options {
-	fv, _ := config.NewTemplate("{{.Icon}} {{.Percent}}%")
-
-	return Options{
-		Format: config.Format{Template: fv},
-		Icons:  []rune{'󰃞', '󰃟', '󰃝', '󰃠'},
-		OnClick: config.MouseActions[MouseOptions]{
-			Actions: map[string]*config.MouseAction[MouseOptions]{
-				"wheel-up": {
-					Run: []string{"brightnessctl", "set", "+5%"},
-				},
-				"wheel-down": {
-					Run: []string{"brightnessctl", "set", "5%-"},
-				},
-			},
+func init() {
+	module.Register(module.Def{
+		Name:    "backlight",
+		Doc:     "screen brightness via sysfs/udev",
+		New:     func() module.Module { return &backlightModule{} },
+		Options: func() any { return &Options{} },
+		Placeholders: []module.Placeholder{
+			{Name: "icon", Doc: "brightness level icon", Kind: module.KindString},
+			{Name: "light", Doc: "brightness percentage", Kind: module.KindNumber},
+			{Name: "now", Doc: "raw brightness value", Kind: module.KindNumber},
+			{Name: "max", Doc: "raw maximum brightness", Kind: module.KindNumber},
 		},
-	}
+		Defaults: defaults,
+	})
 }

@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/nekorg/pawbar/internal/services"
 	"github.com/nekorg/pawbar/internal/utils"
 )
 
@@ -79,13 +78,6 @@ type I3Node struct {
 	WindowProperties *WindowProperties `json:"window_properties"`
 	Name             string            `json:"name"`
 	AppId            string            `json:"app_id"`
-}
-
-func Register() (*Service, bool) {
-	if s, ok := services.Ensure("i3", func() services.Service { return &Service{} }).(*Service); ok {
-		return s, true
-	}
-	return nil, false
 }
 
 type Container struct {

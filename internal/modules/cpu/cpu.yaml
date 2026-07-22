@@ -1,0 +1,6 @@
+format: " {cpu}%"
+tick: 3s
+high_at: 90
+high_for: 7s
+states:
+  high: { fg: "@urgent" }

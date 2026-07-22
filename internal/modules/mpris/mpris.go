@@ -7,75 +7,87 @@
 package mpris
 
 import (
-	"bytes"
+	_ "embed"
 	"fmt"
 	"strings"
 
-	"git.sr.ht/~rockorager/vaxis"
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/modules"
 	"github.com/godbus/dbus/v5"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-type MprisModule struct {
-	receive     chan bool
-	send        chan modules.Event
-	format      Format
-	opts        Options
-	initialOpts Options
-	conn        *dbus.Conn
-	channel     chan *dbus.Signal
-	artists     []string
-	title       string
+//go:embed mpris.yaml
+var defaults []byte
+
+func init() {
+	module.Register(module.Def{
+		Name: "mpris",
+		Doc:  "media player status via MPRIS",
+		New:  func() module.Module { return &mprisModule{} },
+		States: []module.StateDef{
+			{Name: "playing", Doc: "a player is playing"},
+			{Name: "paused", Doc: "a player is paused"},
+		},
+		Placeholders: []module.Placeholder{
+			{Name: "artists", Doc: "track artists, comma separated", Kind: module.KindString},
+			{Name: "title", Doc: "track title", Kind: module.KindString},
+		},
+		Verbs: []module.VerbDef{
+			{Name: "play-pause", Doc: "toggle playback on the active player"},
+		},
+		Defaults: defaults,
+	})
 }
 
-func New() modules.Module { return &MprisModule{} }
-
-func (mod *MprisModule) Name() string                                  { return "mpris" }
-func (mod *MprisModule) Dependencies() []string                        { return nil }
-func (mod *MprisModule) Channels() (<-chan bool, chan<- modules.Event) { return mod.receive, mod.send }
-
-type Format int
-
-func (f *Format) toggle() {
-	switch *f {
-	case FormatPlay:
-		*f = FormatPause
-	case FormatPause:
-		*f = FormatPlay
-	default:
-		*f = FormatNone
-	}
+type mprisModule struct {
+	conn    *dbus.Conn
+	artists []string
+	title   string
 }
 
-const (
-	FormatNone Format = iota
-	FormatPlay
-	FormatPause
-)
-
-func (mod *MprisModule) Connection() error {
+func (m *mprisModule) Init(ctx *module.Ctx) error {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		return err
 	}
+	m.conn = conn
 
 	call := conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0,
 		"type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'")
 	if call.Err != nil {
-		return err
+		return call.Err
 	}
 	ch := make(chan *dbus.Signal, 10)
 	conn.Signal(ch)
-	mod.conn = conn
-	mod.channel = ch
+
+	// No player yet is fine; the first PropertiesChanged fills us in.
+	m.initState(ctx)
+
+	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) { m.handleSignal(ctx, sig) })
+
+	ctx.HandleVerb("play-pause", func(module.VerbArgs) error {
+		player, err := m.activePlayer()
+		if err != nil {
+			return err
+		}
+		obj := m.conn.Object(player, dbus.ObjectPath("/org/mpris/MediaPlayer2"))
+		if call := obj.Call("org.mpris.MediaPlayer2.Player.PlayPause", 0); call.Err != nil {
+			return fmt.Errorf("PlayPause on %s: %w", player, call.Err)
+		}
+		return nil
+	})
 	return nil
 }
 
-func (mod *MprisModule) selectActivePlayer() (string, error) {
+func (m *mprisModule) Stop(ctx *module.Ctx) {
+	if m.conn != nil {
+		m.conn.Close()
+	}
+}
+
+func (m *mprisModule) activePlayer() (string, error) {
 	var busNames []string
-	if err := mod.conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&busNames); err != nil {
-		return "", fmt.Errorf("failed to list bus names: %w", err)
+	if err := m.conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&busNames); err != nil {
+		return "", fmt.Errorf("list bus names: %w", err)
 	}
 
 	var candidate string
@@ -83,8 +95,7 @@ func (mod *MprisModule) selectActivePlayer() (string, error) {
 		if !strings.HasPrefix(name, "org.mpris.MediaPlayer2.") {
 			continue
 		}
-
-		obj := mod.conn.Object(name, dbus.ObjectPath("/org/mpris/MediaPlayer2"))
+		obj := m.conn.Object(name, dbus.ObjectPath("/org/mpris/MediaPlayer2"))
 		variant, err := obj.GetProperty("org.mpris.MediaPlayer2.Player.PlaybackStatus")
 		if err != nil {
 			if candidate == "" {
@@ -99,218 +110,77 @@ func (mod *MprisModule) selectActivePlayer() (string, error) {
 			candidate = name
 		}
 	}
-
 	if candidate == "" {
 		return "", fmt.Errorf("no MPRIS player found on the session bus")
 	}
 	return candidate, nil
 }
 
-func (mod *MprisModule) setPlaybackFormat(status string) {
-	switch status {
-	case "Playing":
-		mod.format = FormatPlay
-	case "Paused":
-		mod.format = FormatPause
-	case "Stopped":
-		mod.format = FormatNone
-	}
-}
-
-func (mod *MprisModule) applyMetadata(metaMap map[string]dbus.Variant) {
-	if titleVar, found := metaMap["xesam:title"]; found {
-		if title, ok := titleVar.Value().(string); ok {
-			mod.title = title
-		}
-	}
-
-	if artistVar, found := metaMap["xesam:artist"]; found {
-		if artists, ok := artistVar.Value().([]string); ok && len(artists) > 0 {
-			mod.artists = artists
-		}
-	}
-}
-
-func (mod *MprisModule) InitState() error {
-	player, err := mod.selectActivePlayer()
+func (m *mprisModule) initState(ctx *module.Ctx) {
+	player, err := m.activePlayer()
 	if err != nil {
-		return err
+		return
 	}
-
-	obj := mod.conn.Object(player, dbus.ObjectPath("/org/mpris/MediaPlayer2"))
-
-	variant, err := obj.GetProperty("org.mpris.MediaPlayer2.Player.PlaybackStatus")
-	if err == nil {
+	obj := m.conn.Object(player, dbus.ObjectPath("/org/mpris/MediaPlayer2"))
+	if variant, err := obj.GetProperty("org.mpris.MediaPlayer2.Player.PlaybackStatus"); err == nil {
 		if status, ok := variant.Value().(string); ok {
-			mod.setPlaybackFormat(status)
+			m.setPlayback(ctx, status)
 		}
 	}
-
-	variant, err = obj.GetProperty("org.mpris.MediaPlayer2.Player.Metadata")
-	if err == nil {
+	if variant, err := obj.GetProperty("org.mpris.MediaPlayer2.Player.Metadata"); err == nil {
 		if metaMap, ok := variant.Value().(map[string]dbus.Variant); ok {
-			mod.applyMetadata(metaMap)
+			m.applyMetadata(metaMap)
 		}
 	}
-
-	return nil
 }
 
-func (mod *MprisModule) CatchEvent(signal *dbus.Signal) error {
-	if len(signal.Body) < 3 {
-		return fmt.Errorf("Distorted Signals")
+func (m *mprisModule) handleSignal(ctx *module.Ctx, sig *dbus.Signal) {
+	if len(sig.Body) < 3 {
+		return
 	}
-
-	iface, ok := signal.Body[0].(string)
+	iface, ok := sig.Body[0].(string)
 	if !ok || iface != "org.mpris.MediaPlayer2.Player" {
-		return fmt.Errorf("Invalid Interface found")
+		return
 	}
-
-	changedProps, ok := signal.Body[1].(map[string]dbus.Variant)
+	changed, ok := sig.Body[1].(map[string]dbus.Variant)
 	if !ok {
-		return fmt.Errorf("Error in parsing changed properties")
+		return
 	}
-	for prop, val := range changedProps {
+	for prop, val := range changed {
 		switch prop {
 		case "PlaybackStatus":
 			if status, ok := val.Value().(string); ok {
-				mod.setPlaybackFormat(status)
+				m.setPlayback(ctx, status)
 			}
-
 		case "Metadata":
-			metaMap, ok := val.Value().(map[string]dbus.Variant)
-			if !ok {
-				break
-			}
-			mod.applyMetadata(metaMap)
-		}
-	}
-	return nil
-}
-
-func (mod *MprisModule) SendEvent() error {
-	activePlayer, err := mod.selectActivePlayer()
-	if err != nil {
-		return err
-	}
-
-	obj := mod.conn.Object(activePlayer, dbus.ObjectPath("/org/mpris/MediaPlayer2"))
-	call := obj.Call("org.mpris.MediaPlayer2.Player.PlayPause", 0)
-	if call.Err != nil {
-		return fmt.Errorf("failed to send PlayPause to %s: %w", activePlayer, call.Err)
-	}
-
-	return nil
-}
-
-func (mod *MprisModule) Run() (<-chan bool, chan<- modules.Event, error) {
-	err := mod.Connection()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	mod.InitState()
-	mod.send = make(chan modules.Event)
-	mod.receive = make(chan bool)
-
-	mod.initialOpts = mod.opts
-	if err != nil {
-		return nil, nil, err
-	}
-
-	go func() {
-		for {
-			select {
-
-			case sig := <-mod.channel:
-				err = mod.CatchEvent(sig)
-				if err != nil {
-					continue
-				}
-				mod.receive <- true
-
-			case e := <-mod.send:
-				switch ev := e.VaxisEvent.(type) {
-				case vaxis.Mouse:
-					if ev.EventType != vaxis.EventPress {
-						break
-					}
-					btn := config.ButtonName(ev)
-					if btn == "left" {
-						err = mod.SendEvent()
-						if err != nil {
-							continue
-						}
-						mod.format.toggle()
-						mod.receive <- true
-					}
-					if mod.opts.OnClick.Dispatch(btn, &mod.initialOpts, &mod.opts) {
-						mod.receive <- true
-					}
-
-				case modules.FocusIn:
-					if mod.opts.OnClick.HoverIn(&mod.opts) {
-						mod.receive <- true
-					}
-
-				case modules.FocusOut:
-					if mod.opts.OnClick.HoverOut(&mod.opts) {
-						mod.receive <- true
-					}
-				}
+			if metaMap, ok := val.Value().(map[string]dbus.Variant); ok {
+				m.applyMetadata(metaMap)
 			}
 		}
-	}()
-
-	return mod.receive, mod.send, nil
+	}
 }
 
-func (mod *MprisModule) Render() []modules.EventCell {
-	style := vaxis.Style{
-		Foreground: mod.opts.Fg.Go(),
-		Background: mod.opts.Bg.Go(),
-	}
+func (m *mprisModule) setPlayback(ctx *module.Ctx, status string) {
+	ctx.SetState("playing", status == "Playing")
+	ctx.SetState("paused", status == "Paused")
+}
 
-	artists := strings.Join(mod.artists, ",")
-	data := struct {
-		Icon    string
-		Artists string
-		Title   string
-	}{}
-
-	var tpl config.Format
-
-	switch mod.format {
-	case FormatPlay:
-		data.Icon = string(mod.opts.Play.Icon)
-		data.Artists = artists
-		data.Title = mod.title
-		tpl = mod.opts.Play.Format
-	case FormatPause:
-		data.Icon = string(mod.opts.Pause.Icon)
-		data.Artists = artists
-		data.Title = mod.title
-		tpl = mod.opts.Pause.Format
-	default:
-		tpl = mod.opts.Format
-	}
-
-	var buf bytes.Buffer
-	if err := tpl.Execute(&buf, data); err != nil {
-		return nil
-	}
-
-	chars := vaxis.Characters(buf.String())
-	r := make([]modules.EventCell, len(chars))
-	for i, ch := range chars {
-		r[i] = modules.EventCell{
-			C: vaxis.Cell{
-				Character: ch,
-				Style:     style,
-			},
-			Mod:        mod,
-			MouseShape: mod.opts.Cursor.Go(),
+func (m *mprisModule) applyMetadata(metaMap map[string]dbus.Variant) {
+	if titleVar, found := metaMap["xesam:title"]; found {
+		if title, ok := titleVar.Value().(string); ok {
+			m.title = title
 		}
 	}
-	return r
+	if artistVar, found := metaMap["xesam:artist"]; found {
+		if artists, ok := artistVar.Value().([]string); ok && len(artists) > 0 {
+			m.artists = artists
+		}
+	}
+}
+
+func (m *mprisModule) Render(w *module.Writer) {
+	w.Text(module.P{
+		"artists": strings.Join(m.artists, ","),
+		"title":   m.title,
+	})
 }

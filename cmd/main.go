@@ -8,6 +8,8 @@ package cmd
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -15,17 +17,47 @@ import (
 	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/modules"
-	_ "github.com/nekorg/pawbar/internal/modules/all"
+	"github.com/nekorg/pawbar/internal/core"
+	_ "github.com/nekorg/pawbar/internal/modules/builtin"
 	"github.com/nekorg/pawbar/internal/tui"
 	"github.com/nekorg/pawbar/internal/utils"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
 func init() {
 	katnip.RegisterFunc("pawbar", mainLoop)
 }
 
+// Pawbar parses flags and launches the bar panel. The kitty child process
+// never reaches this function (katnip intercepts it at init), so settings
+// travel to the panel through PAWBAR_* environment variables.
 func Pawbar() {
+	cfgFlag := flag.String("config", "", "config file `path` (default ~/.config/pawbar/pawbar.yaml)")
+	strictFlag := flag.Bool("strict", false, "refuse to start on any config issue")
+	checkFlag := flag.Bool("check", false, "validate the config and exit")
+	resolvedFlag := flag.Bool("resolved", false, "print the resolved per-slot configuration and exit")
+	flag.Parse()
+
+	if *cfgFlag != "" {
+		os.Setenv("PAWBAR_CONFIG", *cfgFlag)
+	}
+	if *strictFlag {
+		os.Setenv("PAWBAR_STRICT", "1")
+	}
+	if *checkFlag {
+		os.Exit(checkConfig())
+	}
+	if *resolvedFlag {
+		os.Exit(dumpResolved())
+	}
+	if args := flag.Args(); len(args) > 0 {
+		if args[0] == "defaults" {
+			os.Exit(printDefaults(args[1:]))
+		}
+		fmt.Fprintf(os.Stderr, "unknown command %q (did you mean `pawbar defaults`?)\n", args[0])
+		os.Exit(2)
+	}
+
 	panel := katnip.NewPanel(
 		"pawbar",
 		katnip.Config{
@@ -55,10 +87,45 @@ func Pawbar() {
 	panel.Run()
 }
 
-func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
-	cfgPath := os.Getenv("HOME") + "/.config/pawbar/pawbar.yaml"
+func configPath() string {
+	if p := os.Getenv("PAWBAR_CONFIG"); p != "" {
+		return p
+	}
+	return os.Getenv("HOME") + "/.config/pawbar/pawbar.yaml"
+}
 
+// checkConfig validates the config and reports every issue; exit status 1
+// when any exist.
+func checkConfig() int {
+	path := configPath()
+	f, issues := config.Read(path)
+	_, ci := config.Compile(f)
+	issues = append(issues, ci...)
+	for _, issue := range issues {
+		fmt.Fprintf(os.Stderr, "%s:%s\n", path, issue.Error())
+	}
+	if len(issues) > 0 {
+		return 1
+	}
+	fmt.Printf("%s: OK\n", path)
+	return 0
+}
+
+func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	utils.Logger = log.New(rw, "", log.LstdFlags)
+
+	strictEnv := os.Getenv("PAWBAR_STRICT") != ""
+
+	f, issues := config.Read(configPath())
+	bar, compileIssues := config.Compile(f)
+	issues = append(issues, compileIssues...)
+	for _, issue := range issues {
+		utils.Logger.Printf("config: %s", issue.Error())
+	}
+	if (bar.Settings.Strict || strictEnv) && len(issues) > 0 {
+		utils.Logger.Printf("config: strict mode, refusing to start with %d issue(s)", len(issues))
+		return 1
+	}
 
 	vx, err := vaxis.New(vaxis.Options{EnableSGRPixels: true})
 	if err != nil {
@@ -77,15 +144,12 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	win := vx.Window()
 	win.Clear()
 
-	cfg, err := config.Parse(cfgPath)
-	if err != nil {
-		utils.Logger.Printf("config error: %v\n", err)
-		return 1
-	}
+	engine := core.New(bar, utils.Logger.Printf)
 
-	l, m, r := config.InstantiateModules(cfg)
-
-	modev, l, m, r := modules.Init(l, m, r)
+	w, h := win.Size()
+	utils.Logger.Printf("Panel Size (cells): %d, %d\n", w, h)
+	tui.Init(w, h, bar.Settings)
+	tui.SetSlotCounts(engine.SlotCounts())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -94,162 +158,125 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	userSignals := setupUserSignals()
 	resumeCh := watchResume(ctx)
 
-	var prevHoverMod modules.Module
-	var prevHoverCell modules.EventCell
+	reloadCh, werr := core.WatchConfig(ctx.Done(), configPath(), utils.Logger.Printf)
+	if werr != nil {
+		utils.Logger.Printf("config: hot reload disabled: %v", werr)
+	}
 
-	w, h := win.Size()
-	pw, ph := 0, 0
-	mouseX, _ := 0, 0
-	utils.Logger.Printf("Panel Size (cells): %d, %d\n", w, h)
+	engine.Start()
+	defer engine.Stop()
+
 	mouseShape := vaxis.MouseShapeDefault
 
-	broadcastEvent := func(ev modules.Event) {
-		mods := make([]modules.Module, 0, len(l)+len(m)+len(r))
-		mods = append(mods, l...)
-		mods = append(mods, m...)
-		mods = append(mods, r...)
-		for _, mod := range mods {
-			if mod == nil {
-				continue
-			}
-			_, send := mod.Channels()
-			go func(send chan<- modules.Event) {
-				send <- ev
-			}(send)
-		}
+	render := func() {
+		tui.Render(win)
+		vx.Render()
+	}
+	fullResize := func() {
+		win = vx.Window()
+		w, h = win.Size()
+		tui.Resize(w, h)
+		render()
 	}
 
-	tui.Init(w, h, l, m, r, cfg.Bar)
-	tui.FullRender(win)
-	vx.Render()
+	render()
 
-	isRunning := true
-	for isRunning {
+	for {
 		select {
 		case ev := <-screenEvents:
-			utils.Logger.Printf("Event: %#v\n", ev)
 			switch ev := ev.(type) {
 			case vaxis.Resize:
-				pw, ph = ev.XPixel, ev.YPixel
-				win = vx.Window()
-				w, h = win.Size()
-				tui.Resize(w, h)
-				tui.FullRender(win)
-				vx.Render()
-				utils.Logger.Printf("Panel Size: %d, %d\n", pw, ph)
+				fullResize()
+				utils.Logger.Printf("Panel Size: %d, %d\n", ev.XPixel, ev.YPixel)
 			case vaxis.Redraw:
-				tui.FullRender(win)
-				vx.Render()
+				render()
 			case vaxis.Key:
 				if ev.String() == "Ctrl+c" {
-					isRunning = false
 					vx.PostEvent(vaxis.QuitEvent{})
 				}
-
 			case vaxis.FocusOut:
-				if prevHoverMod != nil {
-					_, send := prevHoverMod.Channels()
-					send <- modules.Event{
-						Cell: prevHoverCell,
-						VaxisEvent: modules.FocusOut{
-							PrevMod: prevHoverMod,
-							NewMod:  nil,
-						},
-					}
-					prevHoverMod = nil
-				}
+				engine.PointerLeft()
+				updateMouseShape(vx, vaxis.MouseShapeDefault, &mouseShape)
 			case vaxis.Mouse:
-				mouseX, _ = ev.Col, ev.Row
-
 				if ev.EventType == vaxis.EventLeave {
-					vx.PostEvent(vaxis.FocusOut{})
+					engine.PointerLeft()
+					updateMouseShape(vx, vaxis.MouseShapeDefault, &mouseShape)
 					continue
 				}
-				c := tui.State()[mouseX]
-
-				curMod := c.Mod
-				if curMod != prevHoverMod {
-					if prevHoverMod != nil {
-						_, send := prevHoverMod.Channels()
-						send <- modules.Event{
-							Cell: prevHoverCell,
-							VaxisEvent: modules.FocusOut{
-								PrevMod: prevHoverMod,
-								NewMod:  curMod,
-							},
-						}
-					}
-
-					if curMod != nil {
-						_, send := curMod.Channels()
-						send <- modules.Event{
-							Cell: c,
-							VaxisEvent: modules.FocusIn{
-								PrevMod: prevHoverMod,
-								NewMod:  curMod,
-							},
-						}
-					}
-					prevHoverMod = curMod
-					prevHoverCell = c
+				hit, ok := tui.HitAt(ev.Col)
+				engine.Mouse(core.Side(hit.Side), hit.Index, hit.Region, ev, ok)
+				shape := vaxis.MouseShapeDefault
+				if ok {
+					shape = hit.Shape
 				}
-
-				if curMod != nil {
-					_, send := curMod.Channels()
-					send <- modules.Event{Cell: c, VaxisEvent: ev}
-				}
-				updateMouseShape(vx, c, &mouseShape, true)
+				updateMouseShape(vx, shape, &mouseShape)
 			case vaxis.QuitEvent:
 				utils.Logger.Printf("Received exit signal\n")
-				isRunning = false
+				return 0
 			}
-		case m := <-modev:
-			utils.Logger.Println("render:", m.Name())
-			tui.PartialRender(win, m)
-			vx.Render()
+
+		case u := <-engine.Updates():
+			tui.SetSnapshot(int(u.Side), u.Index, u.Segs)
+			// Coalesce whatever else is already queued before rendering.
+			for {
+				select {
+				case u = <-engine.Updates():
+					tui.SetSnapshot(int(u.Side), u.Index, u.Segs)
+					continue
+				default:
+				}
+				break
+			}
+			render()
+
 		case s := <-userSignals:
 			utils.Logger.Printf("full render: %s", canonicalSignalName(s))
-			win = vx.Window()
-			w, h = win.Size()
-			tui.Resize(w, h)
-			tui.FullRender(win)
-			vx.Render()
+			fullResize()
+
 		case resumeEv := <-resumeCh:
-			utils.Logger.Printf("full render: waking from suspend")
-			broadcastEvent(modules.Event{VaxisEvent: modules.SystemWake{Source: resumeEv.Source}})
-			win = vx.Window()
-			w, h = win.Size()
-			tui.Resize(w, h)
-			tui.FullRender(win)
-			vx.Render()
+			utils.Logger.Printf("waking from suspend (%s)", resumeEv.Source)
+			engine.Wake()
+			fullResize()
+
+		case <-reloadCh:
+			nf, nIssues := config.Read(configPath())
+			newBar, ci := config.Compile(nf)
+			nIssues = append(nIssues, ci...)
+			for _, issue := range nIssues {
+				utils.Logger.Printf("config: %s", issue.Error())
+			}
+			strict := newBar.Settings.Strict || strictEnv
+			if nIssues.Fatal() || (strict && len(nIssues) > 0) {
+				utils.Logger.Printf("config: reload rejected, keeping previous configuration")
+				continue
+			}
+			utils.Logger.Printf("config: reloading")
+			bar = newBar
+			engine.Reload(bar)
+			tui.Init(w, h, bar.Settings)
+			tui.SetSlotCounts(engine.SlotCounts())
+			// Reseed the fresh slot tables with every runner's last
+			// output: kept modules must not blank out until their next
+			// event.
+			engine.Snapshots(func(side core.Side, idx int, segs []module.Segment) {
+				tui.SetSnapshot(int(side), idx, segs)
+			})
+			render()
+
+		case s := <-engine.Restarts():
+			engine.RestartSlot(s)
 		}
 	}
-	return 0
 }
 
-func updateMouseShape(
-	vx *vaxis.Vaxis,
-	ec modules.EventCell,
-	old *vaxis.MouseShape,
-	render bool,
-) {
-	target := ec.MouseShape
+func updateMouseShape(vx *vaxis.Vaxis, target vaxis.MouseShape, old *vaxis.MouseShape) {
 	if target == "" {
 		target = vaxis.MouseShapeDefault
 	}
-	if ec.Mod == nil {
-		target = vaxis.MouseShapeDefault
-	}
-
 	if *old == target {
 		return
 	}
-
 	*old = target
-	utils.Logger.Printf("mouse shape: %s\n", *old)
 	vx.SetMouseShape(target)
-
-	if render {
-		vx.Render()
-	}
+	vx.Render()
 }

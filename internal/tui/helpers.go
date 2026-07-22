@@ -8,7 +8,7 @@ package tui
 
 import (
 	"git.sr.ht/~rockorager/vaxis"
-	"github.com/nekorg/pawbar/internal/modules"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
 func anchorOf(s string) anchor {
@@ -22,84 +22,85 @@ func anchorOf(s string) anchor {
 	}
 }
 
-func refreshModMap(l, m, r []modules.Module) {
-	for _, mod := range append(append(l, m...), r...) {
-		modMap[mod] = mod.Render()
-	}
-}
-
-// flattens modules into blocks sorted by priority.
+// buildBlocks flattens the snapshots into one cell run per side, ordered
+// by truncation priority.
 func buildBlocks() []block {
-	cells := map[string][]modules.EventCell{
-		"left":   flatten(leftModules),
-		"middle": flatten(middleModules),
-		"right":  flatten(rightModules),
+	cells := map[string][]cell{
+		"left":   flatten(0),
+		"middle": flatten(1),
+		"right":  flatten(2),
 	}
-
 	blocks := make([]block, 0, 3)
 	for _, name := range truncOrder {
-		blocks = append(blocks, block{
-			cells: cells[name],
-			side:  anchorOf(name),
-		})
+		blocks = append(blocks, block{cells: cells[name], side: anchorOf(name)})
 	}
 	return blocks
 }
 
-func stringToEC(s string) []modules.EventCell {
-	ecs := make([]modules.EventCell, 0, len(s))
-	for _, c := range vaxis.Characters(s) {
-		ecs = append(ecs, modules.EventCell{C: vaxis.Cell{Character: c}})
-	}
-
-	return ecs
-}
-
-// writes cell and adds padding for grapheme's with >1 width
-// returns x + {grapheme width}
-func writeCell(win vaxis.Window, x int, c modules.EventCell) int {
-	if x+c.C.Width > width {
-		return x + c.C.Width
-	}
-	win.SetCell(x, 0, c.C)
-	state[x] = c
-
-	for w := 1; w < c.C.Width; w++ {
-		empty := vaxis.Cell{Style: c.C.Style}
-		win.SetCell(x+w, 0, empty)
-		state[x+w] = modules.EventCell{
-			C:          empty,
-			Metadata:   c.Metadata,
-			Mod:        c.Mod,
-			MouseShape: c.MouseShape,
+func flatten(side int) []cell {
+	var out []cell
+	for idx, segs := range snapshots[side] {
+		for _, seg := range segs {
+			hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
+			out = append(out, textToCells(seg.Text, seg.Style, hit, true)...)
 		}
-	}
-	return x + c.C.Width
-}
-
-func flatten(mods []modules.Module) []modules.EventCell {
-	// each module will probably require more than 3 cells
-	// ws with 1 workspace requires 3, so most of them will
-	// take more than that right? right? (foreshadowing)
-	out := make([]modules.EventCell, 0, len(mods)*3)
-	for _, m := range mods {
-		out = append(out, modMap[m]...)
 	}
 	return out
 }
 
-// this keeps account for grapheme widths
-// so this is safe for anchor calculations; probably?
-func totalWidth(cells []modules.EventCell) int {
+// textToCells splits text into grapheme cells carrying hit metadata.
+func textToCells(s string, style vaxis.Style, hit Hit, hasMod bool) []cell {
+	chars := vaxis.Characters(s)
+	out := make([]cell, 0, len(chars))
+	for _, ch := range chars {
+		out = append(out, cell{
+			c:      vaxis.Cell{Character: ch, Style: style},
+			hit:    hit,
+			hasMod: hasMod,
+		})
+	}
+	return out
+}
+
+// SegmentsWidth measures rendered segments in bar columns.
+func SegmentsWidth(segs []module.Segment) int {
 	w := 0
-	for _, c := range cells {
-		w += c.C.Width
+	for _, seg := range segs {
+		for _, ch := range vaxis.Characters(seg.Text) {
+			w += ch.Width
+		}
 	}
 	return w
 }
 
-// also adds ellipsis at the start. ellipsis huh, weird word
-func trimStart(cells []modules.EventCell, w int, ellipsis bool) []modules.EventCell {
+// writeCell writes one cell (padding wide graphemes) and mirrors it into
+// the hit table. Returns x + grapheme width.
+func writeCell(win vaxis.Window, x int, c cell) int {
+	if x+c.c.Width > width {
+		return x + c.c.Width
+	}
+	win.SetCell(x, 0, c.c)
+	state[x] = c
+
+	for w := 1; w < c.c.Width; w++ {
+		empty := vaxis.Cell{Style: c.c.Style}
+		win.SetCell(x+w, 0, empty)
+		state[x+w] = cell{c: empty, hit: c.hit, hasMod: c.hasMod}
+	}
+	return x + c.c.Width
+}
+
+func totalWidth(cells []cell) int {
+	w := 0
+	for _, c := range cells {
+		w += c.c.Width
+	}
+	return w
+}
+
+// trimStart keeps the leading cells that fit in w, optionally appending an
+// ellipsis.
+func trimStart(cells []cell, w int, ellipsis bool) []cell {
 	if w <= 0 {
 		return nil
 	}
@@ -115,17 +116,18 @@ func trimStart(cells []modules.EventCell, w int, ellipsis bool) []modules.EventC
 	acc := 0
 	end := 0
 	for ; end < len(cells) && acc < w; end++ {
-		acc += totalWidth(cells[end : end+1])
+		acc += cells[end].c.Width
 	}
 	trim := cells[:end]
 	if ellipsis {
-		trim = append(trim, ellipsisCells...)
+		trim = append(clone(trim), ellipsisCells...)
 	}
 	return trim
 }
 
-// also adds ellipsis at the end. ellipsis huh, indeed a weird word
-func trimEnd(cells []modules.EventCell, w int, ellipsis bool) []modules.EventCell {
+// trimEnd keeps the trailing cells that fit in w, optionally prepending an
+// ellipsis.
+func trimEnd(cells []cell, w int, ellipsis bool) []cell {
 	if w <= 0 {
 		return nil
 	}
@@ -142,7 +144,7 @@ func trimEnd(cells []modules.EventCell, w int, ellipsis bool) []modules.EventCel
 	start := len(cells)
 	for start > 0 && acc < w {
 		start--
-		acc += totalWidth(cells[start : start+1])
+		acc += cells[start].c.Width
 	}
 	trim := cells[start:]
 	if ellipsis {
@@ -151,8 +153,8 @@ func trimEnd(cells []modules.EventCell, w int, ellipsis bool) []modules.EventCel
 	return trim
 }
 
-// also adds ellipsis at the end and start. huh weird, where have I seen thi-
-func trimMiddle(cells []modules.EventCell, w int, ellipsis bool) []modules.EventCell {
+// trimMiddle keeps the middle, trimming both ends evenly.
+func trimMiddle(cells []cell, w int, ellipsis bool) []cell {
 	if w <= 0 || totalWidth(cells) <= w {
 		return cells
 	}
@@ -164,28 +166,25 @@ func trimMiddle(cells []modules.EventCell, w int, ellipsis bool) []modules.Event
 		w -= ellW
 	}
 
-	left, right := 0, len(cells)-1
+	lo, hi := 0, len(cells)-1
 	cur := totalWidth(cells)
-	for cur > w && left < right {
-		cur -= cells[left].C.Width
-		left++
-		if cur > w && left < right {
-			cur -= cells[right].C.Width
-			right--
+	for cur > w && lo < hi {
+		cur -= cells[lo].c.Width
+		lo++
+		if cur > w && lo < hi {
+			cur -= cells[hi].c.Width
+			hi--
 		}
 	}
-	trimmed := cells[left : right+1]
+	trimmed := cells[lo : hi+1]
 	if ellipsis {
-		trimmed = append(
-			append(clone(ellipsisCells), trimmed...),
-			ellipsisCells...,
-		)
+		trimmed = append(append(clone(ellipsisCells), trimmed...), ellipsisCells...)
 	}
 	return trimmed
 }
 
-func clone(src []modules.EventCell) []modules.EventCell {
-	out := make([]modules.EventCell, len(src))
+func clone(src []cell) []cell {
+	out := make([]cell, len(src))
 	copy(out, src)
 	return out
 }

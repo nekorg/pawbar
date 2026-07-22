@@ -1,0 +1,5 @@
+format: "{time:%Y-%m-%d %H:%M:%S}"
+tick: 5s
+auto_tick: true
+on:
+  right: calendar

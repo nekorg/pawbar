@@ -1,0 +1,6 @@
+format: "{icon}"
+tick: 5s
+device_index: 2
+icons: ["󰤯", "󰤟", "󰤢", "󰤥", "󰤨"]
+states:
+  disconnected: { fg: darkgray, format: "󰤭" }

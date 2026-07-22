@@ -7,163 +7,80 @@
 package battery
 
 import (
-	"bytes"
-
-	"git.sr.ht/~rockorager/vaxis"
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/lookup/icons"
-	"github.com/nekorg/pawbar/internal/modules"
+	"github.com/godbus/dbus/v5"
 	"github.com/nekorg/pawbar/internal/utils"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-func New() modules.Module {
-	return &Battery{}
-}
-
-type Battery struct {
-	receive chan bool
-	send    chan modules.Event
-
-	opts        Options
-	initialOpts Options
-
+type batteryModule struct {
+	opts   *Options
+	conn   *dbus.Conn
 	device UPowerDevice
 }
 
-func (mod *Battery) Dependencies() []string {
-	return []string{}
-}
+func (m *batteryModule) Init(ctx *module.Ctx) error {
+	m.opts = ctx.Options().(*Options)
 
-func (mod *Battery) Run() (<-chan bool, chan<- modules.Event, error) {
-	mod.send = make(chan modules.Event)
-	mod.receive = make(chan bool)
-	mod.initialOpts = mod.opts
-
-	upower, uch, err := ConnectUPower()
+	conn, ch, err := ConnectUPower()
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
+	m.conn = conn
+	m.device, _ = GetDisplayDevice(conn)
+	m.applyStates(ctx)
 
-	mod.device, _ = GetDisplayDevice(upower)
-
-	go func() {
-		defer upower.Close()
-		for {
-			select {
-			case sig := <-uch:
-				HandleSignal(sig, &mod.device)
-				mod.receive <- true
-			case e := <-mod.send:
-				switch ev := e.VaxisEvent.(type) {
-				case vaxis.Mouse:
-					if ev.EventType != vaxis.EventPress {
-						continue
-					}
-					btn := config.ButtonName(ev)
-					if mod.opts.OnClick.Dispatch(btn, &mod.initialOpts, &mod.opts) {
-						mod.receive <- true
-					}
-
-				case modules.FocusIn:
-					if mod.opts.OnClick.HoverIn(&mod.opts) {
-						mod.receive <- true
-					}
-
-				case modules.FocusOut:
-					if mod.opts.OnClick.HoverOut(&mod.opts) {
-						mod.receive <- true
-					}
-				}
-			}
-		}
-	}()
-
-	return mod.receive, mod.send, nil
-}
-
-func pickThreshold(p int, th []ThresholdOptions) *ThresholdOptions {
-	for _, t := range th {
-		matchUp := t.Direction.IsUp() && p >= t.Percent.Go()
-		matchDown := !t.Direction.IsUp() && p <= t.Percent.Go()
-		if matchUp || matchDown {
-			return &t
-		}
-	}
+	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) {
+		HandleSignal(sig, &m.device)
+		m.applyStates(ctx)
+	})
 	return nil
 }
 
-func (mod *Battery) Render() []modules.EventCell {
-	percent := int(mod.device.Percentage)
-	style := vaxis.Style{}
+func (m *batteryModule) OnState(ctx *module.Ctx) {
+	m.opts = ctx.Options().(*Options)
+}
 
-	icon := ' '
-	eta := 0
+func (m *batteryModule) Stop(ctx *module.Ctx) {
+	if m.conn != nil {
+		m.conn.Close()
+	}
+}
 
-	if mod.device.State == StateCharging || mod.device.State == StateFullyCharged {
-		icon = icons.Choose(mod.opts.Charging.Icons, percent)
-		eta = int(mod.device.TimeToFull)
-		style.Foreground = mod.opts.Charging.Fg.Go()
-		style.Background = mod.opts.Charging.Bg.Go()
+func (m *batteryModule) applyStates(ctx *module.Ctx) {
+	pct := int(m.device.Percentage)
+	ctx.SetState("charging", m.device.State == StateCharging)
+	ctx.SetState("charged", m.device.State == StateFullyCharged)
+	ctx.SetState("low", pct <= m.opts.LowAt.Go())
+	ctx.SetState("warn", pct <= m.opts.WarnAt.Go() && pct > m.opts.LowAt.Go())
+}
+
+func (m *batteryModule) Render(w *module.Writer) {
+	pct := int(m.device.Percentage)
+
+	var icon string
+	var eta int
+	switch m.device.State {
+	case StateFullyCharged:
+		icon = m.opts.ChargedIcon
+	case StateCharging:
+		icon = pickIcon(m.opts.ChargingIcons, pct)
+		eta = int(m.device.TimeToFull)
+	default:
+		icon = pickIcon(m.opts.DischargingIcons, pct)
+		eta = int(m.device.TimeToEmpty)
 	}
 
-	if mod.device.State == StateDischarging {
-		icon = icons.Choose(mod.opts.Discharging.Icons, percent)
-		eta = int(mod.device.TimeToEmpty)
-		style.Foreground = mod.opts.Discharging.Fg.Go()
-		style.Background = mod.opts.Discharging.Bg.Go()
-	}
-
-	t := pickThreshold(percent, mod.opts.Thresholds)
-	if t != nil {
-		style.Foreground = t.Fg.Go()
-		style.Background = t.Bg.Go()
-	}
-
-	if mod.device.State == StateFullyCharged {
-		style.Foreground = mod.opts.Charged.Fg.Go()
-		style.Background = mod.opts.Charged.Bg.Go()
-		icon = mod.opts.Charged.Icon
-	}
-
-	// TODO: make config items implement IsZeroer
-	//       to save my soul
-	if mod.opts.Fg.Go() != vaxis.Color(0) {
-		style.Foreground = mod.opts.Fg.Go()
-	}
-	if mod.opts.Bg.Go() != vaxis.Color(0) {
-		style.Background = mod.opts.Bg.Go()
-	}
-
-	var buf bytes.Buffer
-
-	err := mod.opts.Format.Execute(&buf, struct {
-		Icon    string
-		Percent int
-		Hours   int
-		Minutes int
-	}{
-		Icon:    string(icon),
-		Percent: percent,
-		Hours:   eta / 3600,
-		Minutes: (eta / 60) % 60,
+	w.Text(module.P{
+		"icon":    icon,
+		"bat":     pct,
+		"hours":   eta / 3600,
+		"minutes": (eta / 60) % 60,
 	})
-	if err != nil {
-		utils.Logger.Printf("battery: render error: %v", err)
-	}
-
-	rch := vaxis.Characters(buf.String())
-	r := make([]modules.EventCell, len(rch))
-
-	for i, ch := range rch {
-		r[i] = modules.EventCell{C: vaxis.Cell{Character: ch, Style: style}, Mod: mod, MouseShape: mod.opts.Cursor.Go()}
-	}
-	return r
 }
 
-func (mod *Battery) Channels() (<-chan bool, chan<- modules.Event) {
-	return mod.receive, mod.send
-}
-
-func (mod *Battery) Name() string {
-	return "battery"
+func pickIcon(icons []string, pct int) string {
+	if len(icons) == 0 {
+		return ""
+	}
+	return icons[utils.Clamp(pct*len(icons)/100, 0, len(icons)-1)]
 }

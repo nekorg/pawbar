@@ -8,29 +8,20 @@ package pulse
 
 import (
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
-	"github.com/nekorg/pawbar/internal/services"
 	"github.com/codelif/pulseaudio"
 )
 
-func Register() (*PulseService, bool) {
-	s, ok := services.Ensure("pulse", func() services.Service { return &PulseService{} }).(*PulseService)
-	return s, ok
-}
-
-func GetService() (*PulseService, bool) {
-	if s, ok := services.ServiceRegistry["pulse"].(*PulseService); ok {
-		return s, true
-	}
-	return nil, false
-}
-
 type PulseService struct {
-	running   bool
-	exit      chan bool
-	listeners []chan<- SinkEvent
-	client    *pulseaudio.Client
+	running bool
+	exit    chan bool
+	client  *pulseaudio.Client
+
+	lmu       sync.Mutex
+	listeners []chan SinkEvent
 }
 
 type SinkEvent struct {
@@ -43,9 +34,25 @@ func (p *PulseService) Name() string { return "pulse" }
 
 func (p *PulseService) IssueListener() <-chan SinkEvent {
 	l := make(chan SinkEvent, 10)
+	p.lmu.Lock()
 	p.listeners = append(p.listeners, l)
+	p.lmu.Unlock()
 
 	return l
+}
+
+// RemoveListener detaches a channel previously issued by IssueListener so
+// the service stops broadcasting to it (hot reload removes modules while
+// the service keeps running for other subscribers).
+func (p *PulseService) RemoveListener(l <-chan SinkEvent) {
+	p.lmu.Lock()
+	defer p.lmu.Unlock()
+	for i, ch := range p.listeners {
+		if (<-chan SinkEvent)(ch) == l {
+			p.listeners = append(p.listeners[:i], p.listeners[i+1:]...)
+			return
+		}
+	}
 }
 
 func (p *PulseService) Start() error {
@@ -76,8 +83,16 @@ func (p *PulseService) Start() error {
 					if err != nil {
 						continue
 					}
-					for _, ch := range p.listeners {
-						ch <- sink
+					p.lmu.Lock()
+					listeners := slices.Clone(p.listeners)
+					p.lmu.Unlock()
+					for _, ch := range listeners {
+						// Non-blocking: a stale listener must never
+						// wedge the broadcast for everyone else.
+						select {
+						case ch <- sink:
+						default:
+						}
 					}
 				}
 			case <-p.exit:
@@ -146,16 +161,18 @@ func (p *PulseService) GetDefaultSinkInfo() (SinkEvent, error) {
 	}, nil
 }
 
+// SetSinkVolume sets the sink volume as a percentage (0-100+).
 func (p *PulseService) SetSinkVolume(sink string, volume float64) error {
 	if !p.running {
 		return fmt.Errorf("pulse service not running")
 	}
-	return p.SetSinkVolume(sink, volume)
+	return p.client.SetSinkVolume(sink, float32(volume/100))
 }
 
+// SetSinkMute mutes or unmutes the default sink.
 func (p *PulseService) SetSinkMute(sink string, mute bool) error {
 	if !p.running {
 		return fmt.Errorf("pulse service not running")
 	}
-	return p.SetSinkMute(sink, mute)
+	return p.client.SetMute(mute)
 }

@@ -7,38 +7,27 @@
 package locale
 
 import (
-	"time"
+	_ "embed"
 
-	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/modules"
+	"github.com/nekorg/pawbar/pkg/module"
 )
 
-func init() {
-	config.RegisterModule("locale", defaultOptions, func(o Options) (modules.Module, error) { return &LocaleModule{opts: o}, nil })
-}
+//go:embed locale.yaml
+var defaults []byte
 
 type Options struct {
-	Fg      config.Color                      `yaml:"fg"`
-	Bg      config.Color                      `yaml:"bg"`
-	Cursor  config.Cursor                     `yaml:"cursor"`
-	Format  config.Format                     `yaml:"format"`
-	Tick    config.Duration                   `yaml:"tick"`
-	OnClick config.MouseActions[MouseOptions] `yaml:"onmouse"`
+	Tick module.Duration `yaml:"tick"`
 }
 
-type MouseOptions struct {
-	Fg     *config.Color    `yaml:"fg"`
-	Bg     *config.Color    `yaml:"bg"`
-	Cursor *config.Cursor   `yaml:"cursor"`
-	Tick   *config.Duration `yaml:"tick"`
-	Format *config.Format   `yaml:"format"`
-}
-
-func defaultOptions() Options {
-	f, _ := config.NewTemplate("{{.Locale}}")
-	return Options{
-		Format:  config.Format{Template: f},
-		Tick:    config.Duration(7 * time.Second),
-		OnClick: config.MouseActions[MouseOptions]{},
-	}
+func init() {
+	module.Register(module.Def{
+		Name:    "locale",
+		Doc:     "current locale from the environment",
+		New:     func() module.Module { return &localeModule{} },
+		Options: func() any { return &Options{} },
+		Placeholders: []module.Placeholder{
+			{Name: "locale", Doc: "language-REGION, e.g. en-US", Kind: module.KindString},
+		},
+		Defaults: defaults,
+	})
 }

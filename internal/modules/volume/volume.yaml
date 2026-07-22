@@ -1,0 +1,9 @@
+format: "{icon} {vol}%"
+icons: ["󰕿", "󰖀", "󰕾"]
+step: 5
+states:
+  muted: { fg: darkgray, format: "󰖁 MUTED" }
+on:
+  left: toggle-mute
+  scroll-up: volume-up
+  scroll-down: volume-down

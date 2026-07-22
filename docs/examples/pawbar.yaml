@@ -1,0 +1,39 @@
+# pawbar example configuration
+# ~/.config/pawbar/pawbar.yaml
+
+bar:
+  truncate_priority: [right, left, middle]
+  ellipsis: "…"
+  # strict: true          # fail hard on any config error (also: pawbar --strict)
+
+theme:
+  vars:
+    accent: "#7aa2f7"
+    warn: "#e0af68"
+  defaults:               # applies to every module; entries override
+    fg: "#c0caf5"
+    states:
+      hover: { bold: true }   # bar-wide hover styling
+
+left:
+  - ws
+  - sep
+
+right:
+  - volume:
+      format: "{icon} {vol}%"
+      states:
+        muted: { fg: "@warn", format: "{icon} --" }
+      on:
+        left: toggle-mute
+        scroll-up: volume-up
+        scroll-down: volume-down
+  - sep
+  - clock:
+      format: "{time:%H:%M}"
+      states:
+        full: { format: "{time:%A %d %B %H:%M:%S}" }
+        hover: { fg: "@accent" }
+      on:
+        left: { cycle: [full] }
+        right: { run: "gnome-calendar" }

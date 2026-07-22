@@ -15,16 +15,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
-
-	"github.com/nekorg/pawbar/internal/services"
 )
-
-func Register() (*Service, bool) {
-	if s, ok := services.Ensure("hypr", func() services.Service { return &Service{} }).(*Service); ok {
-		return s, true
-	}
-	return nil, false
-}
 
 type Service struct {
 	callbacks map[string][]chan<- HyprEvent
