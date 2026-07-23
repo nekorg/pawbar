@@ -18,6 +18,12 @@ import (
 //go:embed mpris.yaml
 var defaults []byte
 
+const (
+	mprisPrefix = "org.mpris.MediaPlayer2."
+	mprisPath   = dbus.ObjectPath("/org/mpris/MediaPlayer2")
+	playerIface = "org.mpris.MediaPlayer2.Player"
+)
+
 func init() {
 	module.Register(module.Def{
 		Name: "mpris",
@@ -39,7 +45,12 @@ func init() {
 }
 
 type mprisModule struct {
-	conn    *dbus.Conn
+	conn *dbus.Conn
+
+	// player is the well-known bus name being tracked; owner is its
+	// unique name, which is what signal senders carry.
+	player  string
+	owner   string
 	artists []string
 	title   string
 }
@@ -51,26 +62,39 @@ func (m *mprisModule) Init(ctx *module.Ctx) error {
 	}
 	m.conn = conn
 
+	// Player property changes, narrowed to the MPRIS object path;
+	// handleSignal still has to check the sender against the tracked
+	// player.
 	call := conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0,
-		"type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'")
+		"type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='"+string(mprisPath)+"'")
+	if call.Err != nil {
+		return call.Err
+	}
+	// Player lifecycle: names appearing/disappearing under the MPRIS
+	// namespace.
+	call = conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0,
+		"type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'")
 	if call.Err != nil {
 		return call.Err
 	}
 	ch := make(chan *dbus.Signal, 10)
 	conn.Signal(ch)
 
-	// No player yet is fine; the first PropertiesChanged fills us in.
-	m.initState(ctx)
+	// No player yet is fine; NameOwnerChanged adopts the first one.
+	m.reselect(ctx)
 
 	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) { m.handleSignal(ctx, sig) })
 
 	ctx.HandleVerb("play-pause", func(module.VerbArgs) error {
-		player, err := m.activePlayer()
-		if err != nil {
-			return err
+		player := m.player
+		if player == "" {
+			var err error
+			if player, err = m.activePlayer(); err != nil {
+				return err
+			}
 		}
-		obj := m.conn.Object(player, dbus.ObjectPath("/org/mpris/MediaPlayer2"))
-		if call := obj.Call("org.mpris.MediaPlayer2.Player.PlayPause", 0); call.Err != nil {
+		obj := m.conn.Object(player, mprisPath)
+		if call := obj.Call(playerIface+".PlayPause", 0); call.Err != nil {
 			return fmt.Errorf("PlayPause on %s: %w", player, call.Err)
 		}
 		return nil
@@ -92,11 +116,11 @@ func (m *mprisModule) activePlayer() (string, error) {
 
 	var candidate string
 	for _, name := range busNames {
-		if !strings.HasPrefix(name, "org.mpris.MediaPlayer2.") {
+		if !strings.HasPrefix(name, mprisPrefix) {
 			continue
 		}
-		obj := m.conn.Object(name, dbus.ObjectPath("/org/mpris/MediaPlayer2"))
-		variant, err := obj.GetProperty("org.mpris.MediaPlayer2.Player.PlaybackStatus")
+		obj := m.conn.Object(name, mprisPath)
+		variant, err := obj.GetProperty(playerIface + ".PlaybackStatus")
 		if err != nil {
 			if candidate == "" {
 				candidate = name
@@ -116,48 +140,113 @@ func (m *mprisModule) activePlayer() (string, error) {
 	return candidate, nil
 }
 
-func (m *mprisModule) initState(ctx *module.Ctx) {
+// reselect picks the most relevant player and adopts its state, or
+// clears everything when no player is left.
+func (m *mprisModule) reselect(ctx *module.Ctx) {
 	player, err := m.activePlayer()
 	if err != nil {
+		m.clear(ctx)
 		return
 	}
-	obj := m.conn.Object(player, dbus.ObjectPath("/org/mpris/MediaPlayer2"))
-	if variant, err := obj.GetProperty("org.mpris.MediaPlayer2.Player.PlaybackStatus"); err == nil {
+	m.adopt(ctx, player)
+}
+
+// adopt starts tracking player and loads its current state.
+func (m *mprisModule) adopt(ctx *module.Ctx, player string) {
+	m.player = player
+	m.owner = ""
+	var owner string
+	if err := m.conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, player).Store(&owner); err == nil {
+		m.owner = owner
+	}
+
+	m.title, m.artists = "", nil
+	obj := m.conn.Object(player, mprisPath)
+	if variant, err := obj.GetProperty(playerIface + ".PlaybackStatus"); err == nil {
 		if status, ok := variant.Value().(string); ok {
 			m.setPlayback(ctx, status)
 		}
 	}
-	if variant, err := obj.GetProperty("org.mpris.MediaPlayer2.Player.Metadata"); err == nil {
+	if variant, err := obj.GetProperty(playerIface + ".Metadata"); err == nil {
 		if metaMap, ok := variant.Value().(map[string]dbus.Variant); ok {
 			m.applyMetadata(metaMap)
 		}
 	}
 }
 
+func (m *mprisModule) clear(ctx *module.Ctx) {
+	m.player, m.owner = "", ""
+	m.title, m.artists = "", nil
+	ctx.SetState("playing", false)
+	ctx.SetState("paused", false)
+}
+
 func (m *mprisModule) handleSignal(ctx *module.Ctx, sig *dbus.Signal) {
-	if len(sig.Body) < 3 {
-		return
-	}
-	iface, ok := sig.Body[0].(string)
-	if !ok || iface != "org.mpris.MediaPlayer2.Player" {
-		return
-	}
-	changed, ok := sig.Body[1].(map[string]dbus.Variant)
-	if !ok {
-		return
-	}
-	for prop, val := range changed {
-		switch prop {
-		case "PlaybackStatus":
-			if status, ok := val.Value().(string); ok {
-				m.setPlayback(ctx, status)
+	switch sig.Name {
+	case "org.freedesktop.DBus.NameOwnerChanged":
+		if len(sig.Body) < 3 {
+			return
+		}
+		name, _ := sig.Body[0].(string)
+		newOwner, _ := sig.Body[2].(string)
+		if !strings.HasPrefix(name, mprisPrefix) {
+			return
+		}
+		switch {
+		case name == m.player && newOwner == "":
+			// Our player exited; fall back to whatever is left.
+			m.reselect(ctx)
+		case name == m.player:
+			m.owner = newOwner
+		case m.player == "" && newOwner != "":
+			m.adopt(ctx, name)
+		}
+
+	case "org.freedesktop.DBus.Properties.PropertiesChanged":
+		if len(sig.Body) < 3 {
+			return
+		}
+		iface, ok := sig.Body[0].(string)
+		if !ok || iface != playerIface {
+			return
+		}
+		changed, ok := sig.Body[1].(map[string]dbus.Variant)
+		if !ok {
+			return
+		}
+
+		if sig.Sender != m.owner {
+			// Another player: switch to it only when it starts
+			// playing, so background players can't clobber the
+			// tracked one.
+			if status, ok := stringProp(changed, "PlaybackStatus"); ok && status == "Playing" {
+				m.reselect(ctx)
 			}
-		case "Metadata":
-			if metaMap, ok := val.Value().(map[string]dbus.Variant); ok {
-				m.applyMetadata(metaMap)
+			return
+		}
+
+		for prop, val := range changed {
+			switch prop {
+			case "PlaybackStatus":
+				if status, ok := val.Value().(string); ok {
+					m.setPlayback(ctx, status)
+				}
+			case "Metadata":
+				if metaMap, ok := val.Value().(map[string]dbus.Variant); ok {
+					m.applyMetadata(metaMap)
+				}
 			}
 		}
 	}
+}
+
+func stringProp(props map[string]dbus.Variant, key string) (string, bool) {
+	v, ok := props[key]
+	if !ok {
+		return "", false
+	}
+	s, ok := v.Value().(string)
+	return s, ok
 }
 
 func (m *mprisModule) setPlayback(ctx *module.Ctx, status string) {
@@ -165,7 +254,10 @@ func (m *mprisModule) setPlayback(ctx *module.Ctx, status string) {
 	ctx.SetState("paused", status == "Paused")
 }
 
+// applyMetadata replaces the track info: MPRIS Metadata is a full
+// snapshot, so a missing key means the new track has no such field.
 func (m *mprisModule) applyMetadata(metaMap map[string]dbus.Variant) {
+	m.title, m.artists = "", nil
 	if titleVar, found := metaMap["xesam:title"]; found {
 		if title, ok := titleVar.Value().(string); ok {
 			m.title = title
