@@ -21,6 +21,7 @@ import (
 	"github.com/nekorg/pawbar/internal/logging"
 	_ "github.com/nekorg/pawbar/internal/modules/builtin"
 	"github.com/nekorg/pawbar/internal/tui"
+	"github.com/nekorg/pawbar/pkg/menus"
 	"github.com/nekorg/pawbar/pkg/module"
 )
 
@@ -144,6 +145,11 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	win := vx.Window()
 	win.Clear()
 
+	{
+		size := vx.Size()
+		menus.SetCellMetrics(size.Cols, size.Rows, size.XPixel, size.YPixel)
+	}
+
 	engine := core.New(bar, log)
 
 	w, h := win.Size()
@@ -186,6 +192,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 		case ev := <-screenEvents:
 			switch ev := ev.(type) {
 			case vaxis.Resize:
+				menus.SetCellMetrics(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
 				fullResize()
 				log.Debug().Msgf("panel size: %d, %d", ev.XPixel, ev.YPixel)
 			case vaxis.Redraw:
