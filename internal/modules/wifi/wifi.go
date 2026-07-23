@@ -135,7 +135,7 @@ func (m *wifiModule) refreshStrength(ctx *module.Ctx) {
 func (m *wifiModule) Render(w *module.Writer) {
 	icon := ""
 	if len(m.opts.Icons) > 0 {
-		idx := utils.Clamp((len(m.opts.Icons)-1)*m.strength/100, 0, len(m.opts.Icons)-1)
+		idx := utils.Clamp(m.strength*len(m.opts.Icons)/100, 0, len(m.opts.Icons)-1)
 		icon = m.opts.Icons[idx]
 	}
 	w.Text(module.P{
