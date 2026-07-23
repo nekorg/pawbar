@@ -24,15 +24,16 @@ func testGeo(panelX, panelY int) wire.Geometry {
 	}
 }
 
-// Sizes below in terms of panelPad: a 20-cell parent is 100+2*panelPad
-// logical wide, a 10x5-cell submenu is (50+2*panelPad)x(50+2*panelPad),
-// and the overlap is one cell = 5 logical.
+// Sizes below: a 20-cell parent is exactly 100 logical wide, a
+// 10x5-cell submenu is exactly 50x50, the overlap is one cell = 5
+// logical; panelPad only widens the edge checks.
 func TestPlaceSubmenuOpensRight(t *testing.T) {
 	x, y, geo := placeSubmenu(testGeo(100, 50), 20, 3, 10, 5)
-	if want := 100 + (100 + 2*panelPad) - 5; x != want {
+	// flush with the parent's real right edge minus the overlap
+	if want := 100 + 100 - 5; x != want {
 		t.Errorf("x = %d, want %d", x, want)
 	}
-	// aligned with row 3: y = 50 + 3*20/2
+	// exactly level with row 3: y = round((50*2 + 3*20)/2)
 	if y != 80 {
 		t.Errorf("y = %d, want 80", y)
 	}
@@ -41,17 +42,29 @@ func TestPlaceSubmenuOpensRight(t *testing.T) {
 	}
 }
 
+func TestPlaceSubmenuRowAlignmentRounds(t *testing.T) {
+	// Fractional logical row offsets round to the nearest unit instead
+	// of truncating: row 3 at 21 physical px/cell on 2x is 31.5.
+	geo := testGeo(100, 50)
+	geo.PPCY = 21
+	_, y, _ := placeSubmenu(geo, 20, 3, 10, 5)
+	// y = round((50*2 + 3*21)/2) = round(81.5) = 82
+	if y != 82 {
+		t.Errorf("y = %d, want 82 (rounded)", y)
+	}
+}
+
 func TestPlaceSubmenuFlipsLeft(t *testing.T) {
 	// Parent near the right edge: the submenu has no room right.
 	x, _, _ := placeSubmenu(testGeo(900, 50), 20, 0, 10, 5)
-	if want := 900 - (50 + 2*panelPad) + 5; x != want {
+	if want := 900 - 50 + 5; x != want {
 		t.Errorf("x = %d, want %d (flipped left)", x, want)
 	}
 }
 
 func TestPlaceSubmenuClampsBottom(t *testing.T) {
 	_, y, _ := placeSubmenu(testGeo(100, 480), 20, 0, 10, 5)
-	if want := 500 - (50 + 2*panelPad); y != want {
+	if want := 500 - 50 - panelPad; y != want {
 		t.Errorf("y = %d, want %d (clamped to bottom)", y, want)
 	}
 }
@@ -70,7 +83,7 @@ func TestPlaceSubmenuWithoutMonitorInfo(t *testing.T) {
 	geo.MonW, geo.MonH = 0, 0
 	x, y, _ := placeSubmenu(geo, 20, 3, 10, 5)
 	// No clamping possible; plain right-side placement.
-	wantX := 100 + (100 + 2*panelPad) - 5
+	wantX := 100 + 100 - 5
 	if x != wantX || y != 80 {
 		t.Errorf("(x,y) = (%d,%d), want (%d,80)", x, y, wantX)
 	}
@@ -91,13 +104,13 @@ func TestClamp(t *testing.T) {
 }
 
 func TestCellsToLogical(t *testing.T) {
-	// 20 cells at 10 physical px/cell on a 2x display: 100 logical
-	// plus panel chrome on both edges.
-	if got := cellsToLogical(20, 10, 2); got != 100+2*panelPad {
-		t.Errorf("cellsToLogical = %d, want %d", got, 100+2*panelPad)
+	// 20 cells at 10 physical px/cell on a 2x display: exactly 100
+	// logical units.
+	if got := cellsToLogical(20, 10, 2); got != 100 {
+		t.Errorf("cellsToLogical = %d, want %d", got, 100)
 	}
-	// Fractional results round up so clamping errs on-screen.
-	if got := cellsToLogical(3, 10, 4); got != 8+2*panelPad {
-		t.Errorf("cellsToLogical = %d, want %d", got, 8+2*panelPad)
+	// Fractional results round up so sizes err on the large side.
+	if got := cellsToLogical(3, 10, 4); got != 8 {
+		t.Errorf("cellsToLogical = %d, want %d", got, 8)
 	}
 }

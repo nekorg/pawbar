@@ -374,6 +374,14 @@ func (h *Handle) read() {
 			}
 			h.geoMu.Unlock()
 		default:
+			if m.Type == wire.MsgSubmenuReq && m.Geo != nil && m.Geo.PPCX > 0 && m.Geo.PPCY > 0 {
+				// The panel measured its own cell metrics; they beat
+				// the bar-derived estimate for placing its submenu.
+				h.geoMu.Lock()
+				h.geo.PPCX = m.Geo.PPCX
+				h.geo.PPCY = m.Geo.PPCY
+				h.geoMu.Unlock()
+			}
 			select {
 			case h.msgs <- m:
 			default:

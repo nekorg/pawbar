@@ -94,10 +94,11 @@ func monitor() (outputs.Monitor, bool) {
 	return m, true
 }
 
-// cellsToLogical converts a size in cells to compositor-logical units,
-// including panel chrome on both edges.
+// cellsToLogical converts a size in cells to compositor-logical units.
+// This is the panel's real footprint; clamping adds panelPad on top,
+// placement math must not.
 func cellsToLogical(cells int, ppc, f float64) int {
-	return int(math.Ceil(float64(cells)*ppc/f)) + 2*panelPad
+	return int(math.Ceil(float64(cells) * ppc / f))
 }
 
 // clampRoot converts a click anchor to a clamped logical position for a
@@ -112,8 +113,8 @@ func clampRoot(at Anchor, wCells, hCells int) (int, int, wire.Geometry) {
 	mon, ok := monitor()
 	if ok {
 		geo.MonW, geo.MonH = mon.ScaledWidth, mon.ScaledHeight
-		w := cellsToLogical(wCells, ppcX, f)
-		h := cellsToLogical(hCells, ppcY, f)
+		w := cellsToLogical(wCells, ppcX, f) + 2*panelPad
+		h := cellsToLogical(hCells, ppcY, f) + 2*panelPad
 		x = clamp(x, 0, mon.ScaledWidth-w)
 		y = clamp(y, 0, mon.ScaledHeight-h)
 	}
@@ -122,9 +123,9 @@ func clampRoot(at Anchor, wCells, hCells int) (int, int, wire.Geometry) {
 }
 
 // placeSubmenu positions a submenu of subW x subH cells next to its
-// parent panel, aligned with the hovered row. It opens to the right with
-// a one-cell overlap and flips to the left edge of the parent when there
-// is no room.
+// parent panel, its first row exactly level with the hovered row. It
+// opens to the right with a one-cell overlap and flips to the left
+// edge of the parent when there is no room.
 func placeSubmenu(parent wire.Geometry, parentWCells, row, subWCells, subHCells int) (int, int, wire.Geometry) {
 	f := parent.Scale
 	overlap := int(parent.PPCX / f)
@@ -133,17 +134,20 @@ func placeSubmenu(parent wire.Geometry, parentWCells, row, subWCells, subHCells 
 	sH := cellsToLogical(subHCells, parent.PPCY, f)
 
 	x := parent.PanelX + pW - overlap
-	y := parent.PanelY + int(float64(row)*parent.PPCY/f)
+	// Compute the row's position in physical pixels and round once, so
+	// the only remaining error is the compositor's logical-pixel
+	// granularity.
+	y := int(math.Round((float64(parent.PanelY)*f + float64(row)*parent.PPCY) / f))
 
 	geo := parent
 	if parent.MonW > 0 {
-		if x+sW > parent.MonW {
+		if x+sW+parent.Pad > parent.MonW {
 			x = parent.PanelX - sW + overlap
 			if x < 0 {
-				x = max(0, parent.MonW-sW)
+				x = max(0, parent.MonW-sW-parent.Pad)
 			}
 		}
-		y = clamp(y, 0, parent.MonH-sH)
+		y = clamp(y, 0, parent.MonH-sH-parent.Pad)
 	}
 	geo.PanelX, geo.PanelY = x, y
 	return x, y, geo
