@@ -80,6 +80,11 @@ type Service struct {
 	stop    chan struct{}
 	pending map[dbus.ObjectPath]struct{}
 
+	// watchers holds the per-item stop channels for the property and
+	// bus monitor goroutines, so removing an item tears them down.
+	watchMu  sync.Mutex
+	watchers map[string]chan struct{}
+
 	// Properties when acting as watcher
 	props *prop.Properties
 	hosts map[string]bool // track registered hosts
@@ -111,11 +116,18 @@ func newSignalBroadcaster(conn *dbus.Conn) *signalBroadcaster {
 	conn.Signal(mainCh)
 
 	go func() {
+		defer logging.Recover("sni.broadcaster")
 		for {
 			select {
 			case <-sb.stop:
 				return
-			case sig := <-mainCh:
+			case sig, ok := <-mainCh:
+				if !ok {
+					// The bus connection closed; without this check the
+					// closed channel would spin this loop at 100% CPU.
+					logging.Log.Warn().Msg("sni: session bus signal channel closed")
+					return
+				}
 				if sig == nil {
 					continue
 				}
@@ -192,6 +204,7 @@ func (s *Service) Start() error {
 	s.hosts = make(map[string]bool)
 	s.stop = make(chan struct{})
 	s.pending = make(map[dbus.ObjectPath]struct{})
+	s.watchers = make(map[string]chan struct{})
 
 	// Create signal broadcaster
 	s.signalBroadcaster = newSignalBroadcaster(conn)
@@ -339,9 +352,18 @@ func (s *Service) attemptWatcherTakeover() {
 		s.props.SetMust(ifaceWatcher, "IsStatusNotifierHostRegistered", s.isAnyHostRegistered())
 	}
 
-	// Start monitoring all existing items since we're now the watcher
+	// Start monitoring all existing items since we're now the watcher,
+	// sharing each item's existing teardown channel.
 	for _, it := range existingItems {
-		go s.monitorItemBus(it)
+		key := it.BusName + string(it.Path)
+		s.watchMu.Lock()
+		done, ok := s.watchers[key]
+		if !ok {
+			done = make(chan struct{})
+			s.watchers[key] = done
+		}
+		s.watchMu.Unlock()
+		go s.monitorItemBus(it, done)
 	}
 
 	logging.Log.Debug().Msgf("sni: inherited %d items from previous watcher", len(existingItems))
@@ -490,11 +512,13 @@ func (s *Service) exportWatcher() error {
 
 	// (Optional) introspection for the host path too
 	hostXML := `<node><interface name="org.kde.StatusNotifierHost"/></node>`
-	_ = s.conn.Export(
+	if err := s.conn.Export(
 		introspect.Introspectable(hostXML),
 		pathHost,
 		"org.freedesktop.DBus.Introspectable",
-	)
+	); err != nil {
+		logging.Log.Warn().Msgf("sni: exporting host introspection: %v", err)
+	}
 
 	return nil
 }
@@ -517,20 +541,22 @@ func (s *Service) isAnyHostRegistered() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Check if we have any registered hosts
 	for _, registered := range s.hosts {
 		if registered {
 			return true
 		}
 	}
-	// We're also a host
-	return true
+	return false
 }
 
 func (s *Service) registerHost() error {
 	s.hostName = fmt.Sprintf("org.kde.StatusNotifierHost-%d", os.Getpid())
-	_, _ = s.conn.RequestName(s.hostName, dbus.NameFlagDoNotQueue)
-	_ = s.conn.Export(struct{}{}, pathHost, ifaceHost)
+	if _, err := s.conn.RequestName(s.hostName, dbus.NameFlagDoNotQueue); err != nil {
+		logging.Log.Warn().Msgf("sni: requesting host name %s: %v", s.hostName, err)
+	}
+	if err := s.conn.Export(struct{}{}, pathHost, ifaceHost); err != nil {
+		logging.Log.Warn().Msgf("sni: exporting host object: %v", err)
+	}
 
 	// Only register if we're not the watcher
 	if !s.owned {
@@ -592,15 +618,30 @@ func (s *Service) trackItem(bus string, path dbus.ObjectPath) {
 	// Fetch properties
 	s.refreshItem(it)
 
+	done := make(chan struct{})
+	s.watchMu.Lock()
+	s.watchers[key] = done
+	s.watchMu.Unlock()
+
 	// Watch for changes
-	go s.watchItemProps(it)
+	go s.watchItemProps(it, done)
 
 	// If we're the watcher, monitor this item's bus for disconnection
 	if s.owned {
-		go s.monitorItemBus(it)
+		go s.monitorItemBus(it, done)
 	}
 
 	s.emit(Event{Kind: ItemAdded, ID: key, Item: *it})
+}
+
+// stopWatchers tears down the goroutines watching a removed item.
+func (s *Service) stopWatchers(key string) {
+	s.watchMu.Lock()
+	if done, ok := s.watchers[key]; ok {
+		close(done)
+		delete(s.watchers, key)
+	}
+	s.watchMu.Unlock()
 }
 
 func (s *Service) removeByPath(path dbus.ObjectPath) {
@@ -612,16 +653,18 @@ func (s *Service) removeByPath(path dbus.ObjectPath) {
 			removed = append(removed, it)
 		}
 	}
+	s.mu.Unlock()
 
-	// Update property if we're the watcher
+	// Update property if we're the watcher. Must happen outside the
+	// lock: getRegisteredItems re-locks.
 	if s.owned && s.props != nil && len(removed) > 0 {
 		s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
 	}
-	s.mu.Unlock()
 
 	// Emit events outside the lock to prevent deadlocks
 	for _, it := range removed {
 		key := it.BusName + string(it.Path)
+		s.stopWatchers(key)
 
 		// Emit unregistered signal if we're the watcher
 		if s.owned {
@@ -651,13 +694,16 @@ func (s *Service) removeByKey(key string) {
 
 	delete(s.items, key)
 	logging.Log.Debug().Msgf("sni: removed item %s from map", key)
-
-	// Update property if we're the watcher
-	if s.owned && s.props != nil {
-		s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
-	}
 	wasOwned := s.owned
 	s.mu.Unlock()
+
+	s.stopWatchers(key)
+
+	// Update property if we're the watcher. Must happen outside the
+	// lock: getRegisteredItems re-locks.
+	if wasOwned && s.props != nil {
+		s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
+	}
 
 	// Emit unregistered signal if we're the watcher (must be outside lock)
 	if wasOwned {
@@ -681,16 +727,18 @@ func (s *Service) purgeByBus(bus string) {
 			removed = append(removed, it)
 		}
 	}
+	s.mu.Unlock()
 
-	// Update property if we're the watcher
+	// Update property if we're the watcher. Must happen outside the
+	// lock: getRegisteredItems re-locks.
 	if s.owned && s.props != nil && len(removed) > 0 {
 		s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
 	}
-	s.mu.Unlock()
 
 	// Emit signals for removed items outside the lock
 	for _, it := range removed {
 		key := it.BusName + string(it.Path)
+		s.stopWatchers(key)
 
 		// Emit unregistered signal if we're the watcher
 		if s.owned {
@@ -736,7 +784,10 @@ func (s *Service) loop() {
 		select {
 		case <-s.stop:
 			return
-		case sig := <-sigch:
+		case sig, ok := <-sigch:
+			if !ok {
+				return
+			}
 			if sig == nil {
 				continue
 			}
@@ -918,17 +969,24 @@ func (s *Service) refreshItem(it *Item) {
 	}
 }
 
-func (s *Service) watchItemProps(it *Item) {
+func (s *Service) watchItemProps(it *Item, done <-chan struct{}) {
+	defer logging.Recover("sni.watchItemProps")
 	rule := fmt.Sprintf("type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='%s',sender='%s'",
 		it.Path, it.BusName)
 	s.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, rule)
 
 	ch := make(chan *dbus.Signal, 16)
 	s.conn.Signal(ch)
+	defer func() {
+		s.conn.RemoveSignal(ch)
+		s.conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, rule)
+	}()
 
 	for {
 		select {
 		case <-s.stop:
+			return
+		case <-done:
 			return
 		case sig := <-ch:
 			if sig == nil || sig.Name != "org.freedesktop.DBus.Properties.PropertiesChanged" {
@@ -956,7 +1014,8 @@ func (s *Service) watchItemProps(it *Item) {
 }
 
 // monitorItemBus watches for when an item's bus connection dies (only when we're the watcher)
-func (s *Service) monitorItemBus(it *Item) {
+func (s *Service) monitorItemBus(it *Item, done <-chan struct{}) {
+	defer logging.Recover("sni.monitorItemBus")
 	key := it.BusName + string(it.Path)
 	logging.Log.Debug().Msgf("sni: starting monitor for item %s", key)
 
@@ -986,8 +1045,13 @@ func (s *Service) monitorItemBus(it *Item) {
 	s.conn.Signal(ch)
 
 	// Watch for both the well-known name and unique name
-	rule1 := fmt.Sprintf("type='signal',interface='org.freedesktop.DBus',member='NameOwnerChanged'")
+	rule1 := "type='signal',interface='org.freedesktop.DBus',member='NameOwnerChanged'"
 	s.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, rule1)
+
+	defer func() {
+		s.conn.RemoveSignal(ch)
+		s.conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, rule1)
+	}()
 
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
@@ -996,6 +1060,9 @@ func (s *Service) monitorItemBus(it *Item) {
 		select {
 		case <-s.stop:
 			logging.Log.Debug().Msgf("sni: stopping monitor for %s (service stopping)", key)
+			return
+
+		case <-done:
 			return
 
 		case <-ticker.C:
@@ -1052,7 +1119,6 @@ func (s *Service) itemStillExists(it *Item) bool {
 
 func (s *Service) applyChanges(it *Item, changed map[string]dbus.Variant) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	for k, v := range changed {
 		switch k {
@@ -1096,7 +1162,11 @@ func (s *Service) applyChanges(it *Item, changed map[string]dbus.Variant) {
 	}
 
 	key := it.BusName + string(it.Path)
-	s.emit(Event{Kind: ItemChanged, ID: key, Item: *it})
+	item := *it
+	s.mu.Unlock()
+
+	// Emit outside the lock: emit re-locks to snapshot listeners.
+	s.emit(Event{Kind: ItemChanged, ID: key, Item: item})
 }
 
 func (s *Service) emit(ev Event) {
