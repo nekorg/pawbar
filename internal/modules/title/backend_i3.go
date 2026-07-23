@@ -7,28 +7,34 @@
 package title
 
 import (
+	"sync"
+
 	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/internal/services/i3"
 )
 
 type i3Backend struct {
-	svc      *i3.Service
-	ev       chan interface{}
-	ev2      chan interface{}
+	svc  *i3.Service
+	ev   chan interface{}
+	ev2  chan interface{}
+	done chan struct{}
+	sig  chan struct{}
+
+	mu       sync.RWMutex
 	instance string
 	title    string
-	sig      chan struct{}
 }
 
 func newI3Backend(s *i3.Service) backend {
 	b := &i3Backend{
-		svc: s,
-		ev:  make(chan interface{}),
-		ev2: make(chan interface{}),
-		sig: make(chan struct{}, 2),
+		svc:  s,
+		ev:   make(chan interface{}, 32),
+		ev2:  make(chan interface{}, 32),
+		done: make(chan struct{}),
+		sig:  make(chan struct{}, 2),
 	}
 
-	b.instance, b.title = i3.GetTitleClass()
+	b.refresh()
 
 	b.svc.RegisterChannel("activeWindow", b.ev)
 	b.svc.RegisterChannel("workspaces", b.ev2)
@@ -37,19 +43,33 @@ func newI3Backend(s *i3.Service) backend {
 	return b
 }
 
+func (b *i3Backend) refresh() {
+	instance, title := i3.GetTitleClass()
+	b.mu.Lock()
+	b.instance, b.title = instance, title
+	b.mu.Unlock()
+}
+
+func (b *i3Backend) Close() {
+	close(b.done)
+}
+
 func (b *i3Backend) loop() {
+	defer logging.Recover("title.i3.loop")
 	for {
 		select {
+		case <-b.done:
+			return
 		case e := <-b.ev:
 			if _, ok := e.(i3.I3WEvent); ok {
-				b.instance, b.title = i3.GetTitleClass()
+				b.refresh()
 				b.signal()
 			} else {
 				logging.Log.Debug().Msgf("title: i3: unknown event on window event channel: %v", e)
 			}
 		case e := <-b.ev2:
 			if _, ok := e.(i3.I3Event); ok {
-				b.instance, b.title = i3.GetTitleClass()
+				b.refresh()
 				b.signal()
 			} else {
 				logging.Log.Debug().Msgf("title: i3: unknown event type on workspace event channel: %v", e)
@@ -66,6 +86,8 @@ func (b *i3Backend) signal() {
 }
 
 func (b *i3Backend) Window() Window {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	return Window{Title: b.title, Class: b.instance}
 }
 func (b *i3Backend) Events() <-chan struct{} { return b.sig }

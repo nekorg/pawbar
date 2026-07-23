@@ -30,6 +30,7 @@ type backend interface {
 	List() []Workspace
 	Events() <-chan struct{}
 	Goto(name string)
+	Close()
 }
 
 type wsModule struct {
@@ -130,6 +131,9 @@ func (m *wsModule) OnState(ctx *module.Ctx) {
 }
 
 func (m *wsModule) Stop(ctx *module.Ctx) {
+	if m.b != nil {
+		m.b.Close()
+	}
 	if m.release != nil {
 		m.release()
 	}

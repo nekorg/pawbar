@@ -15,19 +15,21 @@ import (
 )
 
 type i3Backend struct {
-	svc *i3.Service
-	ev  chan interface{}
-	ws  map[int]*Workspace
-	mu  sync.RWMutex
-	sig chan struct{}
+	svc  *i3.Service
+	ev   chan interface{}
+	done chan struct{}
+	ws   map[int]*Workspace
+	mu   sync.RWMutex
+	sig  chan struct{}
 }
 
 func newI3Backend(s *i3.Service) backend {
 	b := &i3Backend{
-		svc: s,
-		ev:  make(chan interface{}),
-		ws:  make(map[int]*Workspace),
-		sig: make(chan struct{}, 1),
+		svc:  s,
+		ev:   make(chan interface{}, 32),
+		done: make(chan struct{}),
+		ws:   make(map[int]*Workspace),
+		sig:  make(chan struct{}, 1),
 	}
 
 	b.refreshWorkspaceCache()
@@ -38,14 +40,24 @@ func newI3Backend(s *i3.Service) backend {
 	return b
 }
 
+func (b *i3Backend) Close() {
+	close(b.done)
+}
+
 func (b *i3Backend) loop() {
-	for e := range b.ev {
-		if evt, ok := e.(i3.I3Event); ok {
-			logging.Log.Debug().Msgf("ws: i3: event type: %v", evt)
-			b.refreshWorkspaceCache()
-			b.signal()
-		} else {
-			logging.Log.Debug().Msgf("ws: i3: unknown event type: %v", e)
+	defer logging.Recover("ws.i3.loop")
+	for {
+		select {
+		case <-b.done:
+			return
+		case e := <-b.ev:
+			if evt, ok := e.(i3.I3Event); ok {
+				logging.Log.Debug().Msgf("ws: i3: event type: %v", evt)
+				b.refreshWorkspaceCache()
+				b.signal()
+			} else {
+				logging.Log.Debug().Msgf("ws: i3: unknown event type: %v", e)
+			}
 		}
 	}
 }

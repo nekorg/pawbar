@@ -24,6 +24,7 @@ type Window struct {
 type backend interface {
 	Window() Window
 	Events() <-chan struct{}
+	Close()
 }
 
 type titleModule struct {
@@ -98,6 +99,9 @@ func (m *titleModule) selectBackend() error {
 }
 
 func (m *titleModule) Stop(ctx *module.Ctx) {
+	if m.b != nil {
+		m.b.Close()
+	}
 	if m.release != nil {
 		m.release()
 	}
