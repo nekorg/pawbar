@@ -46,10 +46,15 @@ type listRenderer struct {
 	// pixels per cell, for pixel-precise icon placement; 0 when the
 	// terminal didn't report pixel sizes.
 	cellW, cellH int
+	// icons caches encoded images per item: KittyImage encodes
+	// asynchronously (Draw no-ops until ready, then a Redraw event
+	// fires), so re-draws must place the same image, not encode a new
+	// one.
+	icons map[int32]*vaxis.KittyImage
 }
 
 func newListRenderer(win vaxis.Window, fg color.Color) *listRenderer {
-	r := &listRenderer{win: win, fg: fg}
+	r := &listRenderer{win: win, fg: fg, icons: make(map[int32]*vaxis.KittyImage)}
 	if size := win.Vx.Size(); size.Cols > 0 && size.Rows > 0 {
 		r.cellW = size.XPixel / size.Cols
 		r.cellH = size.YPixel / size.Rows
@@ -145,25 +150,26 @@ func gutterText(it *wire.Item) string {
 }
 
 func (r *listRenderer) renderIcon(it *wire.Item, row int, defaultColor color.Color) {
+	kimg, cached := r.icons[it.ID]
+
 	var img image.Image
-	var err error
-
-	switch {
-	case it.IconData != nil:
-		img, err = png.Decode(bytes.NewReader(it.IconData))
-		if err != nil {
-			img = missing.GenerateMissingIconBroken(iconSize, defaultColor)
+	if !cached {
+		var err error
+		switch {
+		case it.IconData != nil:
+			img, err = png.Decode(bytes.NewReader(it.IconData))
+			if err != nil {
+				img = missing.GenerateMissingIconBroken(iconSize, defaultColor)
+			}
+		case it.IconPath != "":
+			img, err = loadIcon(it.IconPath, it.IconName, defaultColor)
+			if err != nil {
+				img = missing.GenerateMissingIcon(iconSize, defaultColor)
+			}
+		default:
+			return
 		}
-	case it.IconPath != "":
-		img, err = loadIcon(it.IconPath, it.IconName, defaultColor)
-		if err != nil {
-			img = missing.GenerateMissingIcon(iconSize, defaultColor)
-		}
-	default:
-		return
 	}
-
-	kimg := r.win.Vx.NewKittyGraphic(img)
 
 	if r.cellW > 0 && r.cellH > 0 {
 		// Scale the icon to fit one row (with a small inset) and
@@ -171,7 +177,11 @@ func (r *listRenderer) renderIcon(it *wire.Item, row int, defaultColor color.Col
 		// offset splits into an anchor cell plus an intra-cell rest,
 		// because the kitty X placement key must stay below one cell.
 		gutterW := gutterCells * r.cellW
-		kimg.ResizePixels(gutterW-2*iconInset, r.cellH-2*iconInset)
+		if !cached {
+			kimg = r.win.Vx.NewKittyGraphic(img)
+			kimg.ResizePixels(gutterW-2*iconInset, r.cellH-2*iconInset)
+			r.icons[it.ID] = kimg
+		}
 		pw, ph := kimg.PixelSize()
 		ox := (gutterW - pw) / 2
 		col := ox / r.cellW
@@ -187,7 +197,11 @@ func (r *listRenderer) renderIcon(it *wire.Item, row int, defaultColor color.Col
 
 	// No pixel metrics: fall back to cell-level placement, biased
 	// toward the label side when the leftover space is odd.
-	kimg.Resize(iconCellWidth, iconCellHeight)
+	if !cached {
+		kimg = r.win.Vx.NewKittyGraphic(img)
+		kimg.Resize(iconCellWidth, iconCellHeight)
+		r.icons[it.ID] = kimg
+	}
 	iw, ih := kimg.CellSize()
 	x := 0
 	if iw < gutterCells {

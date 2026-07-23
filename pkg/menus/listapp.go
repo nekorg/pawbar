@@ -133,7 +133,9 @@ func listApp(s *Session) int {
 			}
 			switch ev := ev.(type) {
 			case vaxis.Redraw:
-				s.Render()
+				// Posted (among others) when an icon finishes its
+				// async encode; redraw so cached images get placed.
+				draw(true)
 
 			case vaxis.Resize:
 				r = newListRenderer(s.Window(), fg)
@@ -205,6 +207,8 @@ func listApp(s *Session) int {
 			if !st.validRow(st.row) {
 				st.row = -1
 			}
+			// New items mean new wire IDs; drop the stale icon cache.
+			r = newListRenderer(s.Window(), fg)
 			r.win.Clear()
 			draw(true)
 			w, h := listDims(st.items)
