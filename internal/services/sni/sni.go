@@ -562,12 +562,18 @@ func (s *Service) registerHost() error {
 	if !s.owned {
 		call := s.watcher.Call(ifaceWatcher+".RegisterStatusNotifierHost", 0, s.hostName)
 		return call.Err
-	} else {
-		// Register ourselves as a host
-		s.mu.Lock()
-		s.hosts[s.hostName] = true
-		s.mu.Unlock()
 	}
+
+	// Register ourselves as a host and advertise it: appindicator
+	// libraries refuse to register items (falling back to XEmbed)
+	// while IsStatusNotifierHostRegistered reads false.
+	s.mu.Lock()
+	s.hosts[s.hostName] = true
+	s.mu.Unlock()
+	if s.props != nil {
+		s.props.SetMust(ifaceWatcher, "IsStatusNotifierHostRegistered", s.isAnyHostRegistered())
+	}
+	s.conn.Emit(pathWatcher, sigHostRegistered)
 
 	return nil
 }
