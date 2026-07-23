@@ -41,6 +41,7 @@ func newI3Backend(s *i3.Service) backend {
 }
 
 func (b *i3Backend) Close() {
+	b.svc.UnregisterChannel(b.ev)
 	close(b.done)
 }
 
@@ -63,18 +64,20 @@ func (b *i3Backend) loop() {
 }
 
 func (b *i3Backend) refreshWorkspaceCache() {
+	workspaces, err := i3.GetWorkspaces()
+	if err != nil {
+		logging.Log.Warn().Msgf("ws: i3: workspaces query: %v; keeping cached list", err)
+		return
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.ws = make(map[int]*Workspace)
-
-	workspaces := i3.GetWorkspaces()
-	active := i3.GetActiveWorkspace()
-
 	for _, w := range workspaces {
 		b.ws[w.Id] = &Workspace{
 			ID:     w.Id,
 			Name:   w.Name,
-			Active: w.Id == active.Id,
+			Active: w.Focused,
 			Urgent: w.Urgent,
 		}
 	}

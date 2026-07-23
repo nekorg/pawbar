@@ -51,6 +51,8 @@ func (b *i3Backend) refresh() {
 }
 
 func (b *i3Backend) Close() {
+	b.svc.UnregisterChannel(b.ev)
+	b.svc.UnregisterChannel(b.ev2)
 	close(b.done)
 }
 

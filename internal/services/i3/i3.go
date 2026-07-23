@@ -14,6 +14,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
+	"sync"
+	"time"
 
 	"github.com/nekorg/pawbar/internal/logging"
 )
@@ -23,16 +26,23 @@ const (
 	I3_IPC_MESSAGE_TYPE_SUBSCRIBE = 2
 	IPC_GET_WORKSPACES            = 1
 	msgTypeGetTree                = 4
+
+	maxBackoff = 30 * time.Second
+	// dispatchTimeout bounds a fan-out send so one wedged consumer
+	// cannot stall the whole event stream.
+	dispatchTimeout = 5 * time.Second
 )
 
-var (
-	event  I3Event
-	wevent I3WEvent
-)
+// EventReconnect marks the synthetic events dispatched after the event
+// socket reconnects; consumers refresh their cached state on any event,
+// so these just need to flow through the normal channels.
+const EventReconnect = "pawbar:reconnect"
 
 type Service struct {
+	mu        sync.RWMutex
 	callbacks map[string][]chan<- interface{}
 	running   bool
+	stop      chan struct{}
 }
 
 type WinInfo struct {
@@ -97,28 +107,63 @@ func (i *Service) Start() error {
 		return nil
 	}
 
-	if os.Getenv("I3SOCK") == "" {
+	if os.Getenv("I3SOCK") == "" && os.Getenv("SWAYSOCK") == "" {
 		return fmt.Errorf("i3 or sway is not running.")
 	}
 
 	i.callbacks = make(map[string][]chan<- interface{})
-	go i.sockMsg()
+	i.stop = make(chan struct{})
+	go i.run()
 	i.running = true
 	return nil
 }
 
 func (i *Service) Stop() error {
+	if !i.running {
+		return nil
+	}
+	i.running = false
+	close(i.stop)
 	return nil
 }
 
 func (i *Service) RegisterChannel(event string, ch chan<- interface{}) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	i.callbacks[event] = append(i.callbacks[event], ch)
+}
+
+// UnregisterChannel removes ch from every event it was registered for.
+func (i *Service) UnregisterChannel(ch chan<- interface{}) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for ev, chans := range i.callbacks {
+		i.callbacks[ev] = slices.DeleteFunc(chans, func(c chan<- interface{}) bool { return c == ch })
+	}
+}
+
+func (i *Service) dispatch(event string, v interface{}) {
+	i.mu.RLock()
+	chans := slices.Clone(i.callbacks[event])
+	i.mu.RUnlock()
+	for _, ch := range chans {
+		select {
+		case ch <- v:
+		case <-time.After(dispatchTimeout):
+			logging.Log.Error().Msgf("i3: consumer stuck, dropping %q event", event)
+		case <-i.stop:
+			return
+		}
+	}
 }
 
 func connectToI3() (net.Conn, error) {
 	sockPath := os.Getenv("I3SOCK")
 	if sockPath == "" {
-		return nil, fmt.Errorf("I3SOCK environment variable is not set")
+		sockPath = os.Getenv("SWAYSOCK")
+	}
+	if sockPath == "" {
+		return nil, fmt.Errorf("neither I3SOCK nor SWAYSOCK is set")
 	}
 
 	conn, err := net.Dial("unix", sockPath)
@@ -184,115 +229,151 @@ func readResponse(conn net.Conn) (uint32, []byte, error) {
 	return responseType, payloadData, nil
 }
 
-func (i *Service) sockMsg() {
+// run subscribes to the event stream and fans events out, reconnecting
+// with backoff when the socket drops (compositor restart/reload).
+func (i *Service) run() {
+	defer logging.Recover("i3.run")
+
+	backoff := time.Second
+	first := true
+	for {
+		select {
+		case <-i.stop:
+			return
+		default:
+		}
+
+		err := i.listen(&first)
+		select {
+		case <-i.stop:
+			return
+		default:
+		}
+		if err != nil {
+			logging.Log.Error().Msgf("i3: event stream: %v (retry in %v)", err, backoff)
+		} else {
+			logging.Log.Warn().Msgf("i3: event socket closed; reconnecting in %v", backoff)
+		}
+		select {
+		case <-i.stop:
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, maxBackoff)
+	}
+}
+
+// listen runs one subscribe-and-read session; it returns when the
+// connection fails or the service stops.
+func (i *Service) listen(first *bool) error {
 	conn, err := connectToI3()
 	if err != nil {
-		logging.Log.Error().Msgf("i3: %v", err)
-		os.Exit(1)
+		return err
 	}
 	defer conn.Close()
+
+	// Unblock the blocking reads when the service stops.
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go func() {
+		select {
+		case <-i.stop:
+			conn.Close()
+		case <-watchDone:
+		}
+	}()
 
 	subscription := []string{"window", "workspace"}
 	payload, err := json.Marshal(subscription)
 	if err != nil {
-		logging.Log.Warn().Msgf("Error marshaling subscription payload: %v", err)
-		os.Exit(1)
+		return fmt.Errorf("marshaling subscription payload: %w", err)
 	}
 
 	if err := sendI3Message(conn, I3_IPC_MESSAGE_TYPE_SUBSCRIBE, payload); err != nil {
-		logging.Log.Error().Msgf("i3: %v", err)
-		os.Exit(1)
+		return err
 	}
 
 	ack, err := readI3Ack(conn)
 	if err != nil {
-		logging.Log.Error().Msgf("i3: %v", err)
-		os.Exit(1)
+		return err
 	}
-
 	logging.Log.Debug().Msgf("i3: subscription acknowledgment: %s", ack)
+
+	if !*first {
+		logging.Log.Info().Msg("i3: event socket reconnected")
+		i.dispatch("workspaces", I3Event{Change: EventReconnect})
+		i.dispatch("activeWindow", I3WEvent{Change: EventReconnect})
+	}
+	*first = false
 
 	for {
 		eventType, eventPayload, err := readResponse(conn)
 		if err != nil {
-			logging.Log.Error().Msgf("i3: reading response: %v", err)
-			break
+			return err
 		}
 
 		switch eventType {
 		case 0x80000000:
+			var event I3Event
 			if err := json.Unmarshal(eventPayload, &event); err != nil {
 				logging.Log.Error().Msgf("i3: unmarshaling event: %v", err)
 				continue
 			}
-
-			if chans, ok := i.callbacks["workspaces"]; ok {
-				for _, ch := range chans {
-					ch <- event
-				}
-			}
+			i.dispatch("workspaces", event)
 		case 0x80000003:
+			var wevent I3WEvent
 			if err := json.Unmarshal(eventPayload, &wevent); err != nil {
 				logging.Log.Error().Msgf("i3: unmarshaling event: %v", err)
 				continue
 			}
-
-			if chans, ok := i.callbacks["activeWindow"]; ok {
-				for _, ch := range chans {
-					ch <- wevent
-				}
-			}
+			i.dispatch("activeWindow", wevent)
 		}
 	}
 }
 
-func GetWorkspaces() []Workspace {
+func GetWorkspaces() ([]Workspace, error) {
 	conn, err := connectToI3()
 	if err != nil {
-		logging.Log.Error().Msgf("i3: %v", err)
-		os.Exit(1)
+		return nil, err
 	}
 	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	payload := []byte("")
-
-	if err := sendI3Message(conn, IPC_GET_WORKSPACES, payload); err != nil {
-		logging.Log.Error().Msgf("i3: %v", err)
-		os.Exit(1)
+	if err := sendI3Message(conn, IPC_GET_WORKSPACES, []byte("")); err != nil {
+		return nil, err
 	}
 
-	eventType, eventPayload, err := readResponse(conn)
-	logging.Log.Debug().Msgf("i3: event of type: %d", eventType)
+	_, eventPayload, err := readResponse(conn)
 	if err != nil {
-		logging.Log.Error().Msgf("i3: %v", err)
-		return nil
+		return nil, err
 	}
 
 	var workspaces []Workspace
 	if err = json.Unmarshal(eventPayload, &workspaces); err != nil {
-		logging.Log.Error().Msgf("i3: unmarshaling JSON: %v", err)
-		return nil
+		return nil, fmt.Errorf("unmarshaling workspaces: %w", err)
 	}
 
-	return workspaces
+	return workspaces, nil
 }
 
 func GoToWorkspace(name string) {
 	cmd := exec.Command("i3-msg", "workspace", name)
 	if err := cmd.Run(); err != nil {
-		logging.Log.Warn().Msgf("Error executing command: %v", err)
-		os.Exit(1)
+		logging.Log.Error().Msgf("i3: workspace switch: %v", err)
 	}
 }
 
-func GetActiveWorkspace() Workspace {
-	workspaces := GetWorkspaces()
+func GetActiveWorkspace() (Workspace, error) {
+	workspaces, err := GetWorkspaces()
+	if err != nil {
+		return Workspace{}, err
+	}
 	for _, ws := range workspaces {
 		if ws.Focused {
-			return ws
+			return ws, nil
 		}
 	}
-	return Workspace{}
+	return Workspace{}, nil
 }
 
 var isSway = os.Getenv("SWAYSOCK") != ""
@@ -301,19 +382,17 @@ func GetTitleClass() (string, string) {
 	conn, err := connectToI3()
 	if err != nil {
 		logging.Log.Error().Msgf("i3: %v", err)
-		os.Exit(1)
+		return "", ""
 	}
 	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	payload := []byte("")
-
-	if err := sendI3Message(conn, msgTypeGetTree, payload); err != nil {
+	if err := sendI3Message(conn, msgTypeGetTree, []byte("")); err != nil {
 		logging.Log.Error().Msgf("i3: %v", err)
-		os.Exit(1)
+		return "", ""
 	}
 
-	eventType, eventPayload, err := readResponse(conn)
-	logging.Log.Debug().Msgf("i3: event of type: %d", eventType)
+	_, eventPayload, err := readResponse(conn)
 	if err != nil {
 		logging.Log.Error().Msgf("i3: %v", err)
 		return "", ""
@@ -321,7 +400,7 @@ func GetTitleClass() (string, string) {
 
 	var root I3Node
 	if err := json.Unmarshal(eventPayload, &root); err != nil {
-		logging.Log.Warn().Msgf("Failed to parse JSON: %v", err)
+		logging.Log.Error().Msgf("i3: parsing tree: %v", err)
 		return "", ""
 	}
 
