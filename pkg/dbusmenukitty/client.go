@@ -9,7 +9,6 @@ package dbusmenukitty
 import (
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"time"
 
@@ -96,16 +95,13 @@ func (c *DBusMenuClient) AboutToShow(id int32) (bool, error) {
 	return needUpdate, err
 }
 
-func LaunchMenu(x, y int) {
-	busname := "org.freedesktop.network-manager-applet"
-	path := "/org/ayatana/NotificationItem/nm_applet/Menu"
-
-	// busname = "org.blueman.Tray"
-	// path = "/org/blueman/sni/menu"
-
+// LaunchMenu opens the dbusmenu of the item exported at busname/path.
+// It blocks until the menu closes, so run it off the module goroutine.
+func LaunchMenu(busname, path string, x, y int) {
 	client, err := NewDBusMenuClient(busname, path)
 	if err != nil {
-		log.Fatalf("error creating dbus client: %v", err)
+		logging.Log.Error().Msgf("dbusmenu: creating client for %s: %v", busname, err)
+		return
 	}
 	defer client.Close()
 
@@ -117,11 +113,11 @@ func LaunchMenu(x, y int) {
 	// Get initial layout
 	layout, err := client.GetLayout()
 	if err != nil {
-		log.Fatalf("error getting layout: %v", err)
+		logging.Log.Error().Msgf("dbusmenu: getting layout from %s%s: %v", busname, path, err)
+		return
 	}
 
 	logging.Log.Debug().Msgf("Layout retrieved")
-	// printLayout(layout, 0)
 
 	menuItems := FlattenLayout(layout)
 
@@ -314,45 +310,46 @@ func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, pa
 	kn.Wait()
 }
 
-func printLayout(l Layout, indent int) {
-	t, ok := l.Properties["icon-data"]
-	if ok {
-		l.Properties["icon-data"] = dbus.MakeVariant("omitted...")
+// prop reads a typed dbusmenu property; a missing key or an off-spec
+// value type (some tray apps send those) yields ok=false instead of a
+// panic.
+func prop[T any](p map[string]dbus.Variant, key string) (T, bool) {
+	var zero T
+	v, ok := p[key]
+	if !ok {
+		return zero, false
 	}
-	fmt.Printf("%sId: %v\n%sProperties:%v\n%sLayout:\n\n", strings.Repeat(" ", indent*4), l.Id, strings.Repeat(" ", indent*4), l.Properties, strings.Repeat(" ", indent*4))
-
-	if ok {
-		l.Properties["icon-data"] = t
+	t, ok := v.Value().(T)
+	if !ok {
+		logging.Log.Warn().Msgf("dbusmenu: property %q has unexpected type %T", key, v.Value())
+		return zero, false
 	}
-
-	for _, li := range l.Children {
-		printLayout(li, indent+1)
-	}
+	return t, true
 }
 
 func FlattenLayout(parent Layout) (items []menu.Item) {
 	for _, layout := range parent.Children {
 		item := menu.Item{Id: layout.Id}
-		if itemType, ok := layout.Properties["type"]; ok {
-			item.Type = itemType.Value().(string)
+		if itemType, ok := prop[string](layout.Properties, "type"); ok {
+			item.Type = itemType
 		} else {
 			item.Type = menu.ItemStandard
 		}
-		if label, ok := layout.Properties["label"]; ok {
-			item.Label = menu.ParseLabel(label.Value().(string))
+		if label, ok := prop[string](layout.Properties, "label"); ok {
+			item.Label = menu.ParseLabel(label)
 		}
-		if enabled, ok := layout.Properties["enabled"]; ok {
-			item.Enabled = enabled.Value().(bool)
+		if enabled, ok := prop[bool](layout.Properties, "enabled"); ok {
+			item.Enabled = enabled
 		} else {
 			item.Enabled = true
 		}
-		if visible, ok := layout.Properties["visible"]; ok {
-			item.Visible = visible.Value().(bool)
+		if visible, ok := prop[bool](layout.Properties, "visible"); ok {
+			item.Visible = visible
 		} else {
 			item.Visible = true
 		}
-		if iconName, ok := layout.Properties["icon-name"]; ok {
-			item.IconName = iconName.Value().(string)
+		if iconName, ok := prop[string](layout.Properties, "icon-name"); ok {
+			item.IconName = iconName
 			var icon xdgicons.Icon
 			if strings.HasSuffix(item.IconName, "-symbolic") {
 				icon, _ = iconLookup.Lookup(item.IconName)
@@ -361,22 +358,21 @@ func FlattenLayout(parent Layout) (items []menu.Item) {
 			}
 			item.Icon = icon
 		}
-		if iconData, ok := layout.Properties["icon-data"]; ok {
-			item.IconData = iconData.Value().([]byte)
+		if iconData, ok := prop[[]byte](layout.Properties, "icon-data"); ok {
+			item.IconData = iconData
 		}
-		if shortcut, ok := layout.Properties["shortcut"]; ok {
-			item.Shortcut = shortcut.Value().([][]string)
+		if shortcut, ok := prop[[][]string](layout.Properties, "shortcut"); ok {
+			item.Shortcut = shortcut
 		}
-		if toggleType, ok := layout.Properties["toggle-type"]; ok {
-			item.ToggleType = toggleType.Value().(string)
+		if toggleType, ok := prop[string](layout.Properties, "toggle-type"); ok {
+			item.ToggleType = toggleType
 		}
-		if toggleState, ok := layout.Properties["toggle-state"]; ok {
-			item.ToggleState = toggleState.Value().(int32)
+		if toggleState, ok := prop[int32](layout.Properties, "toggle-state"); ok {
+			item.ToggleState = toggleState
 		} else {
 			item.ToggleState = -1
 		}
-		if childrenDisplay, ok := layout.Properties["children-display"]; ok {
-			childrenDisplay := childrenDisplay.Value().(string)
+		if childrenDisplay, ok := prop[string](layout.Properties, "children-display"); ok {
 			item.HasChildren = childrenDisplay == "submenu"
 		}
 

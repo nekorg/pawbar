@@ -83,9 +83,10 @@ func (m *trayModule) OnMouse(ctx *module.Ctx, ev module.Mouse) {
 			// TODO: this assumes 2x scale, use pkg/monitor to determine
 			// the correct scale.
 			px, py := ev.XPixel/2, ev.YPixel/2
-			ctx.Go(func() { dbusmenukitty.LaunchMenu(px, py) })
-		} else {
-			_ = m.svc.ContextMenu(item, x, y)
+			busname, menupath := item.BusName, string(item.MenuPath)
+			ctx.Go(func() { dbusmenukitty.LaunchMenu(busname, menupath, px, py) })
+		} else if err := m.svc.ContextMenu(item, x, y); err != nil {
+			ctx.Log("context menu: %v", err)
 		}
 	case "scroll-up":
 		_ = m.svc.Scroll(item, +120, "vertical")
