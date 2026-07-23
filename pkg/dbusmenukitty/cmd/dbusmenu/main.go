@@ -18,8 +18,8 @@ func main() {
 
 	flag.StringVar(&service, "service", "org.freedesktop.network-manager-applet", "DBus service name exposing a dbusmenu")
 	flag.StringVar(&path, "path", "/org/ayatana/NotificationItem/nm_applet/Menu", "DBus object path of the menu")
-	flag.IntVar(&x, "x", 0, "X coordinate for panel (pixels)")
-	flag.IntVar(&y, "y", 0, "Y coordinate for panel (pixels)")
+	flag.IntVar(&x, "x", 0, "X coordinate for panel (physical pixels)")
+	flag.IntVar(&y, "y", 0, "Y coordinate for panel (physical pixels)")
 	flag.Parse()
 
 	// LaunchMenu will not return until the panel closes (or an error occurs).

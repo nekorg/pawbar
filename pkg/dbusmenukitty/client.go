@@ -4,24 +4,22 @@
 //
 // SPDX-License-Identifier: bsd
 
+// Package dbusmenukitty adapts com.canonical.dbusmenu trees (SNI tray
+// context menus) to pawbar's menu framework: it translates the DBus
+// layout into a menus.List, forwards clicks/hovers as dbusmenu events,
+// loads submenus on demand, and mirrors live layout updates.
 package dbusmenukitty
 
 import (
 	"fmt"
-	"io"
-	"strings"
 	"time"
 
-	"github.com/codelif/xdgicons"
-	"github.com/fxamacker/cbor/v2"
 	"github.com/godbus/dbus/v5"
-	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/logging"
-	"github.com/nekorg/pawbar/pkg/dbusmenukitty/menu"
-	"github.com/nekorg/pawbar/pkg/dbusmenukitty/tui"
+	"github.com/nekorg/pawbar/pkg/menus"
+	"github.com/nekorg/pawbar/pkg/menus/wire"
+	"github.com/nekorg/pawbar/pkg/module"
 )
-
-var iconLookup = xdgicons.NewIconLookupWithConfig(xdgicons.LookupConfig{FallbackTheme: "Adwaita"})
 
 type Layout struct {
 	Id         int32
@@ -95,219 +93,166 @@ func (c *DBusMenuClient) AboutToShow(id int32) (bool, error) {
 	return needUpdate, err
 }
 
-// LaunchMenu opens the dbusmenu of the item exported at busname/path.
-// It blocks until the menu closes, so run it off the module goroutine.
-func LaunchMenu(busname, path string, x, y int) {
-	client, err := NewDBusMenuClient(busname, path)
-	if err != nil {
-		logging.Log.Error().Msgf("dbusmenu: creating client for %s: %v", busname, err)
-		return
-	}
-	defer client.Close()
-
-	// Get status
-	var status string
-	client.obj.StoreProperty("com.canonical.dbusmenu.Status", &status)
-	logging.Log.Debug().Msgf("Status: %s", status)
-
-	// Get initial layout
-	layout, err := client.GetLayout()
-	if err != nil {
-		logging.Log.Error().Msgf("dbusmenu: getting layout from %s%s: %v", busname, path, err)
-		return
-	}
-
-	logging.Log.Debug().Msgf("Layout retrieved")
-
-	menuItems := FlattenLayout(layout)
-
-	CreateMenuPanel(client, x, y, menuItems, 0)
+// Open opens (or toggles) the dbusmenu exported at busname/path near
+// the anchor, owned by the invoking module (each bus name toggles
+// independently). Non-blocking.
+func Open(ctx *module.Ctx, at menus.Anchor, busname, path string) {
+	ctx.Go(func() {
+		h, err := launch(busname, path, func(l *menus.List) (*menus.ListHandle, error) {
+			return menus.OpenListH(ctx, at, l)
+		})
+		if err != nil {
+			logging.Log.Error().Msgf("dbusmenu: opening menu of %s: %v", busname, err)
+			return
+		}
+		if h != nil {
+			<-h.Done()
+		}
+	})
 }
 
-func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, parentId int32) {
-	maxHorizontalLength, maxVerticalLength := menu.MaxLengthLabel(menuItems)+4, len(menuItems)
-	logging.Log.Debug().Msgf("%d, %d", maxHorizontalLength, maxVerticalLength)
-
-	kn := CreatePanel(x, y, maxHorizontalLength, maxVerticalLength)
-
-	// Register with submenu manager
-	sm := menu.GetManager()
-	sm.AddPanel(kn, x, y)
-
-	defer func() {
-		sm.HandlePanelExit(kn)
-	}()
-
-	// Send initial menu to panel
-	enc := cbor.NewEncoder(kn.Writer())
-	msg := menu.Message{
-		Type: menu.MsgMenuUpdate,
-		Payload: menu.MessagePayload{
-			Menu: menuItems,
-		},
+// LaunchMenu opens the dbusmenu of the item exported at busname/path,
+// without a module owner, and blocks until it closes. Standalone use
+// (cmd/dbusmenu); x/y are physical pixels.
+func LaunchMenu(busname, path string, x, y int) {
+	h, err := launch(busname, path, func(l *menus.List) (*menus.ListHandle, error) {
+		return menus.LaunchList(menus.Anchor{XPixel: x, YPixel: y}, l)
+	})
+	if err != nil {
+		logging.Log.Error().Msgf("dbusmenu: opening menu of %s: %v", busname, err)
+		return
 	}
-	enc.Encode(msg)
+	if h != nil {
+		<-h.Done()
+	}
+}
 
-	activeSubmenus := make(map[int32]*katnip.Panel)
+// launch fetches the menu layout, opens it through the framework and
+// wires live updates. It returns a nil handle when the open toggled an
+// existing menu closed.
+func launch(busname, path string, open func(*menus.List) (*menus.ListHandle, error)) (*menus.ListHandle, error) {
+	client, err := NewDBusMenuClient(busname, path)
+	if err != nil {
+		return nil, err
+	}
 
-	// Handle events from panel
+	items, err := client.itemsFor(0)
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+
+	h, err := open(&menus.List{Items: items, Key: busname})
+	if err != nil || h == nil {
+		client.Close()
+		return nil, err
+	}
+
+	go client.watchSignals(h)
 	go func() {
-		dec := cbor.NewDecoder(kn.Reader())
-		for {
-			var msg menu.Message
-			if err := dec.Decode(&msg); err != nil {
-				if err == io.EOF {
-					break
+		// Closing the connection also ends the signal watcher.
+		<-h.Done()
+		client.Close()
+	}()
+	return h, nil
+}
+
+// itemsFor loads one level of the dbusmenu tree as list items whose
+// callbacks talk back over DBus.
+func (c *DBusMenuClient) itemsFor(parentID int32) ([]menus.Item, error) {
+	layout, err := c.GetLayoutForParent(parentID)
+	if err != nil {
+		return nil, err
+	}
+	return c.convert(layout), nil
+}
+
+func (c *DBusMenuClient) convert(parent Layout) []menus.Item {
+	items := make([]menus.Item, 0, len(parent.Children))
+	for _, l := range parent.Children {
+		id := l.Id
+		it := menus.Item{}
+
+		if itemType, ok := prop[string](l.Properties, "type"); ok && itemType == "separator" {
+			it.Separator = true
+			items = append(items, it)
+			continue
+		}
+		if label, ok := prop[string](l.Properties, "label"); ok {
+			it.Label = ParseLabel(label).Display
+		}
+		if enabled, ok := prop[bool](l.Properties, "enabled"); ok {
+			it.Disabled = !enabled
+		}
+		if iconName, ok := prop[string](l.Properties, "icon-name"); ok {
+			it.IconName = iconName
+		}
+		if iconData, ok := prop[[]byte](l.Properties, "icon-data"); ok {
+			it.IconData = iconData
+		}
+		if toggleType, ok := prop[string](l.Properties, "toggle-type"); ok {
+			switch toggleType {
+			case "checkmark":
+				it.Toggle = wire.ToggleCheck
+			case "radio":
+				it.Toggle = wire.ToggleRadio
+			}
+		}
+		if toggleState, ok := prop[int32](l.Properties, "toggle-state"); ok {
+			it.Checked = toggleState == 1
+		}
+		if childrenDisplay, ok := prop[string](l.Properties, "children-display"); ok && childrenDisplay == "submenu" {
+			it.HasSubmenu = true
+			it.LoadSubmenu = func() []menus.Item {
+				if _, err := c.AboutToShow(id); err != nil {
+					logging.Log.Warn().Msgf("dbusmenu: AboutToShow: %v", err)
 				}
-				logging.Log.Warn().Msgf("error decoding message from panel: %v", err)
+				sub, err := c.itemsFor(id)
+				if err != nil {
+					logging.Log.Warn().Msgf("dbusmenu: loading submenu: %v", err)
+					return nil
+				}
+				return sub
+			}
+		}
+
+		it.OnClick = func() {
+			if err := c.SendEvent(id, "clicked", ""); err != nil {
+				logging.Log.Warn().Msgf("dbusmenu: sending clicked event: %v", err)
+			}
+		}
+		it.OnHover = func() {
+			if err := c.SendEvent(id, "hovered", ""); err != nil {
+				logging.Log.Warn().Msgf("dbusmenu: sending hovered event: %v", err)
+			}
+		}
+
+		items = append(items, it)
+	}
+	return items
+}
+
+// watchSignals mirrors live dbusmenu changes into the open menu. It
+// exits when the connection closes (menu closed).
+func (c *DBusMenuClient) watchSignals(h *menus.ListHandle) {
+	rule := fmt.Sprintf("type='signal',sender='%s',path='%s',interface='com.canonical.dbusmenu'", c.busname, c.path)
+	c.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, rule)
+
+	ch := make(chan *dbus.Signal, 10)
+	c.conn.Signal(ch)
+
+	for sig := range ch {
+		switch sig.Name {
+		case "com.canonical.dbusmenu.LayoutUpdated",
+			"com.canonical.dbusmenu.ItemsPropertiesUpdated":
+			items, err := c.itemsFor(0)
+			if err != nil {
+				logging.Log.Warn().Msgf("dbusmenu: refreshing layout after signal: %v", err)
 				continue
 			}
-
-			switch msg.Type {
-			case menu.MsgItemClicked:
-				if msg.Payload.ItemId == -1 {
-					logging.Log.Debug().Msgf("Clicked outside: %d", msg.Payload.ItemId)
-					sm.CloseAllMenus()
-					closeMsg := menu.Message{
-						Type:    menu.MsgMenuClose,
-						Payload: menu.MessagePayload{},
-					}
-					enc.Encode(closeMsg)
-					return
-				}
-				if msg.Payload.ItemId != 0 {
-					logging.Log.Debug().Msgf("Item clicked: %d", msg.Payload.ItemId)
-
-					err := client.SendEvent(msg.Payload.ItemId, "clicked", "")
-					if err != nil {
-						logging.Log.Warn().Msgf("error sending clicked event: %v", err)
-					}
-
-					sm.CloseAllMenus()
-					closeMsg := menu.Message{
-						Type:    menu.MsgMenuClose,
-						Payload: menu.MessagePayload{},
-					}
-					enc.Encode(closeMsg)
-					return
-				}
-
-			case menu.MsgItemHovered:
-				if msg.Payload.ItemId != 0 {
-					logging.Log.Debug().Msgf("Item hovered: %d", msg.Payload.ItemId)
-					err := client.SendEvent(msg.Payload.ItemId, "hovered", "")
-					if err != nil {
-						logging.Log.Warn().Msgf("error sending hovered event: %v", err)
-					}
-				}
-			case menu.MsgSubmenuCancelRequested:
-				if msg.Payload.ItemId != 0 {
-					logging.Log.Debug().Msgf("Submenu cancel requested: %d", msg.Payload.ItemId)
-
-					if submenuPanel, exists := activeSubmenus[msg.Payload.ItemId]; exists {
-						cbor.NewEncoder(submenuPanel.Writer()).Encode(menu.Message{Type: menu.MsgMenuClose})
-						// submenuPanel.Stop()
-						delete(activeSubmenus, msg.Payload.ItemId)
-					}
-
-					sm.CloseAllSubmenus()
-				}
-			case menu.MsgSubmenuRequested:
-				if msg.Payload.ItemId != 0 {
-					logging.Log.Debug().Msgf("Submenu requested: %d", msg.Payload.ItemId)
-
-					for itemId, submenuPanel := range activeSubmenus {
-						cbor.NewEncoder(submenuPanel.Writer()).Encode(menu.Message{Type: menu.MsgMenuClose})
-						// submenuPanel.Stop()
-						delete(activeSubmenus, itemId)
-					}
-
-					needUpdate, err := client.AboutToShow(msg.Payload.ItemId)
-					if err != nil {
-						logging.Log.Warn().Msgf("error calling AboutToShow: %v", err)
-					}
-					if needUpdate {
-						// Refresh the layout if needed
-						newLayout, err := client.GetLayoutForParent(parentId)
-						if err != nil {
-							logging.Log.Warn().Msgf("error refreshing layout: %v", err)
-						} else {
-							newMenuItems := FlattenLayout(newLayout)
-							updateMsg := menu.Message{
-								Type: menu.MsgMenuUpdate,
-								Payload: menu.MessagePayload{
-									Menu: newMenuItems,
-								},
-							}
-							enc.Encode(updateMsg)
-						}
-					}
-
-					// Get submenu layout and spawn new panel
-					submenuLayout, err := client.GetLayoutForParent(msg.Payload.ItemId)
-					if err != nil {
-						logging.Log.Warn().Msgf("error getting submenu layout: %v", err)
-					} else if len(submenuLayout.Children) > 0 {
-						submenuItems := FlattenLayout(submenuLayout)
-						if len(submenuItems) > 0 {
-							sm.CloseAllSubmenus()
-							submenuX := x + msg.Payload.X - int((msg.Payload.State.PPC.X*float64(menu.MaxLengthLabel(submenuItems)+4))/2)
-							submenuY := y + int((float64(msg.Payload.Y)*msg.Payload.State.PPC.Y)/2)
-							// Launch submenu panel recursively this time instead bruh
-							go CreateMenuPanel(client, submenuX, submenuY, submenuItems, msg.Payload.ItemId)
-						}
-					}
-				}
-			}
+			h.Update(items)
 		}
-	}()
-
-	// Listen for DBus signals for layout updates
-	go func() {
-		rule := fmt.Sprintf("type='signal',sender='%s',path='%s',interface='com.canonical.dbusmenu'", client.busname, client.path)
-		client.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, rule)
-
-		ch := make(chan *dbus.Signal, 10)
-		client.conn.Signal(ch)
-
-		for signal := range ch {
-			switch signal.Name {
-			case "com.canonical.dbusmenu.LayoutUpdated":
-				logging.Log.Debug().Msgf("Layout updated signal received for panel %d", parentId)
-				// Refresh layout
-				newLayout, err := client.GetLayoutForParent(parentId)
-				if err != nil {
-					logging.Log.Warn().Msgf("error refreshing layout after signal: %v", err)
-				} else {
-					newMenuItems := FlattenLayout(newLayout)
-					updateMsg := menu.Message{
-						Type: menu.MsgMenuUpdate,
-						Payload: menu.MessagePayload{
-							Menu: newMenuItems,
-						},
-					}
-					enc.Encode(updateMsg)
-				}
-			case "com.canonical.dbusmenu.ItemsPropertiesUpdated":
-				logging.Log.Debug().Msgf("Items properties updated signal received for panel %d", parentId)
-				newLayout, err := client.GetLayoutForParent(parentId)
-				if err != nil {
-					logging.Log.Warn().Msgf("error refreshing layout after properties update: %v", err)
-				} else {
-					newMenuItems := FlattenLayout(newLayout)
-					updateMsg := menu.Message{
-						Type: menu.MsgMenuUpdate,
-						Payload: menu.MessagePayload{
-							Menu: newMenuItems,
-						},
-					}
-					enc.Encode(updateMsg)
-				}
-			}
-		}
-	}()
-
-	kn.Wait()
+	}
 }
 
 // prop reads a typed dbusmenu property; a missing key or an off-spec
@@ -327,98 +272,49 @@ func prop[T any](p map[string]dbus.Variant, key string) (T, bool) {
 	return t, true
 }
 
-func FlattenLayout(parent Layout) (items []menu.Item) {
-	for _, layout := range parent.Children {
-		item := menu.Item{Id: layout.Id}
-		if itemType, ok := prop[string](layout.Properties, "type"); ok {
-			item.Type = itemType
-		} else {
-			item.Type = menu.ItemStandard
-		}
-		if label, ok := prop[string](layout.Properties, "label"); ok {
-			item.Label = menu.ParseLabel(label)
-		}
-		if enabled, ok := prop[bool](layout.Properties, "enabled"); ok {
-			item.Enabled = enabled
-		} else {
-			item.Enabled = true
-		}
-		if visible, ok := prop[bool](layout.Properties, "visible"); ok {
-			item.Visible = visible
-		} else {
-			item.Visible = true
-		}
-		if iconName, ok := prop[string](layout.Properties, "icon-name"); ok {
-			item.IconName = iconName
-			var icon xdgicons.Icon
-			if strings.HasSuffix(item.IconName, "-symbolic") {
-				icon, _ = iconLookup.Lookup(item.IconName)
+// Label is a dbusmenu label with its access key extracted.
+type Label struct {
+	Display     string
+	AccessKey   rune
+	AccessIndex int
+	Found       bool
+}
+
+// ParseLabel strips dbusmenu underscore access-key markup ("_File" ->
+// "File", "__" -> "_").
+func ParseLabel(label string) Label {
+	runes := []rune(label)
+	n := len(runes)
+
+	var output []rune
+	outPos := 0
+	var result Label
+
+	for i := 0; i < n; {
+		if runes[i] == '_' {
+			if i+1 < n && runes[i+1] == '_' {
+				output = append(output, '_')
+				outPos++
+				i += 2
 			} else {
-				icon, _ = iconLookup.FindBestIcon([]string{item.IconName + "-symbolic", item.IconName}, 48, 2)
+				if !result.Found && i+1 < n {
+					result.Found = true
+					result.AccessKey = runes[i+1]
+					result.AccessIndex = outPos
+					output = append(output, runes[i+1])
+					outPos++
+					i += 2
+				} else {
+					i++
+				}
 			}
-			item.Icon = icon
-		}
-		if iconData, ok := prop[[]byte](layout.Properties, "icon-data"); ok {
-			item.IconData = iconData
-		}
-		if shortcut, ok := prop[[][]string](layout.Properties, "shortcut"); ok {
-			item.Shortcut = shortcut
-		}
-		if toggleType, ok := prop[string](layout.Properties, "toggle-type"); ok {
-			item.ToggleType = toggleType
-		}
-		if toggleState, ok := prop[int32](layout.Properties, "toggle-state"); ok {
-			item.ToggleState = toggleState
 		} else {
-			item.ToggleState = -1
+			output = append(output, runes[i])
+			outPos++
+			i++
 		}
-		if childrenDisplay, ok := prop[string](layout.Properties, "children-display"); ok {
-			item.HasChildren = childrenDisplay == "submenu"
-		}
-
-		items = append(items, item)
 	}
 
-	return items
-}
-
-func init() {
-	katnip.RegisterFunc("leaf", tui.Leaf)
-}
-
-func CreatePanel(x, y, w, h int) *katnip.Panel {
-	conf := katnip.Config{
-		Position: katnip.Vector{X: x, Y: y},
-		Size:     katnip.Vector{X: w, Y: h},
-		Edge:     katnip.EdgeNone,
-		Layer:    katnip.LayerTop,
-		// FocusPolicy: katnip.FocusOnDemand,
-		FocusPolicy: katnip.FocusExclusive,
-		ConfigFile:  "NONE",
-		KittyOverrides: []string{
-			"font_size=12",
-			"cursor_trail=0",
-			"cursor_shape=beam",
-			"cursor=#000000",
-			"paste_actions=replace-dangerous-control-codes",
-			"map kitty_mod+equal       no_op",
-			"map kitty_mod+plus        no_op",
-			"map kitty_mod+kp_add      no_op",
-			"map cmd+plus              no_op",
-			"map cmd+equal             no_op",
-			"map shift+cmd+equal       no_op",
-			"map kitty_mod+minus       no_op",
-			"map kitty_mod+kp_subtract no_op",
-			"map cmd+minus             no_op",
-			"map shift+cmd+minus       no_op",
-			"map kitty_mod+backspace   no_op",
-			"map cmd+0                 no_op",
-		},
-	}
-
-	kn := katnip.NewPanel("leaf", conf)
-	logging.Log.Debug().Msgf("%s", kn.Cmd.String())
-	kn.Start()
-
-	return kn
+	result.Display = string(output)
+	return result
 }

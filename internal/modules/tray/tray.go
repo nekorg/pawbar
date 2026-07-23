@@ -10,10 +10,10 @@ import (
 	_ "embed"
 	"strconv"
 
-	"github.com/nekorg/pawbar/internal/scale"
 	"github.com/nekorg/pawbar/internal/services"
 	"github.com/nekorg/pawbar/internal/services/sni"
 	"github.com/nekorg/pawbar/pkg/dbusmenukitty"
+	"github.com/nekorg/pawbar/pkg/menus"
 	"github.com/nekorg/pawbar/pkg/module"
 )
 
@@ -85,9 +85,7 @@ func (m *trayModule) OnMouse(ctx *module.Ctx, ev module.Mouse) {
 		}
 	case "right":
 		if item.MenuPath != "" {
-			px, py := scale.Logical(ev.XPixel, ev.YPixel)
-			busname, menupath := item.BusName, string(item.MenuPath)
-			ctx.Go(func() { dbusmenukitty.LaunchMenu(busname, menupath, px, py) })
+			dbusmenukitty.Open(ctx, menus.FromMouse(ev), item.BusName, string(item.MenuPath))
 		} else if err := m.svc.ContextMenu(item, x, y); err != nil {
 			ctx.Log("context menu: %v", err)
 		}
