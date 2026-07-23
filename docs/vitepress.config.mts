@@ -21,8 +21,6 @@ export default defineConfig({
       }
     ],
     [
-      // Symbols-only Nerd Font, so module icons (U+E000..U+F8FF and
-      // plane-15 PUA) render without requiring a locally patched font.
       'link',
       {
         rel: 'stylesheet',
