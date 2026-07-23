@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nekorg/pawbar/internal/menus/calendar"
+	"github.com/nekorg/pawbar/internal/scale"
 	"github.com/nekorg/pawbar/pkg/module"
 )
 
@@ -24,7 +25,7 @@ func (m *clockModule) Init(ctx *module.Ctx) error {
 	module.On(ctx, m.ticker.Source(), func(t time.Time) { m.now = t })
 
 	ctx.HandleVerb("calendar", func(a module.VerbArgs) error {
-		x, y := a.XPixel/2, a.YPixel/2
+		x, y := scale.Logical(a.XPixel, a.YPixel)
 		ctx.Go(func() { calendar.LaunchMenu(x, y) })
 		return nil
 	})

@@ -1,6 +1,6 @@
 module github.com/nekorg/pawbar
 
-go 1.24.5
+go 1.25.6
 
 replace git.sr.ht/~rockorager/vaxis => ./vaxis
 
@@ -8,6 +8,7 @@ require (
 	git.sr.ht/~rockorager/vaxis v0.14.0
 	github.com/Wifx/gonetworkmanager/v3 v3.2.0
 	github.com/codelif/gorsvg v0.1.1
+	github.com/codelif/outputs v0.1.0
 	github.com/codelif/pulseaudio v1.0.0
 	github.com/codelif/xdgicons v0.3.1
 	github.com/fsnotify/fsnotify v1.10.1
@@ -26,6 +27,7 @@ require (
 	github.com/codelif/shmstream v0.0.0-20250707213419-52bb1dd21b7b // indirect
 	github.com/containerd/console v1.0.3 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
+	github.com/jezek/xgb v1.3.0 // indirect
 	github.com/jkeiser/iter v0.0.0-20200628201005-c8aa0ae784d1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
