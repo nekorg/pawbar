@@ -7,8 +7,8 @@
 package title
 
 import (
+	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/internal/services/i3"
-	"github.com/nekorg/pawbar/internal/utils"
 )
 
 type i3Backend struct {
@@ -45,14 +45,14 @@ func (b *i3Backend) loop() {
 				b.instance, b.title = i3.GetTitleClass()
 				b.signal()
 			} else {
-				utils.Logger.Println("DEBUG: ws: i3: Unknown event on window event channel:", e)
+				logging.Log.Debug().Msgf("title: i3: unknown event on window event channel: %v", e)
 			}
 		case e := <-b.ev2:
 			if _, ok := e.(i3.I3Event); ok {
 				b.instance, b.title = i3.GetTitleClass()
 				b.signal()
 			} else {
-				utils.Logger.Println("DEBUG: ws: i3: Unknown event type on workspace event channel:", e)
+				logging.Log.Debug().Msgf("title: i3: unknown event type on workspace event channel: %v", e)
 			}
 		}
 	}

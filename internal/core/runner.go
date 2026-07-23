@@ -118,7 +118,7 @@ func (r *runner) applyPending() {
 	}
 	if rc, ok := r.mod.(module.Reconfigurer); ok {
 		if err := rc.OnConfig(r.ctx); err != nil {
-			r.eng.logf("%s: OnConfig: %v; restarting", p.inst.Name, err)
+			r.eng.log.Error().Str("module", p.inst.Name).Msgf("OnConfig: %v; restarting", err)
 			r.eng.requestRestart(r)
 		}
 	}
@@ -193,7 +193,7 @@ func (r *runner) postNudge() {
 func (r *runner) exec(fn func()) {
 	defer func() {
 		if p := recover(); p != nil {
-			r.eng.logf("%s: panic: %v\n%s", r.in().Name, p, debug.Stack())
+			r.eng.log.Error().Str("module", r.in().Name).Str("stack", string(debug.Stack())).Msgf("panic: %v", p)
 			now := time.Now()
 			if !r.lastPanic.IsZero() && now.Sub(r.lastPanic) < panicParkTime {
 				r.fail(fmt.Sprintf("repeated panic: %v", p))
@@ -219,7 +219,7 @@ func (r *runner) park(msg string) {
 func (r *runner) fail(msg string) {
 	r.broken.Store(true)
 	r.brokenMsg = msg
-	r.eng.logf("%s: %s", r.in().Name, msg)
+	r.eng.log.Error().Str("module", r.in().Name).Msg(msg)
 }
 
 // settle applies pending state changes: re-resolve options, notify the
@@ -240,7 +240,7 @@ func (r *runner) settle() {
 			so.OnState(r.ctx)
 		}
 	}
-	r.eng.logf("%s: state churn: OnState kept flipping states, giving up", r.in().Name)
+	r.eng.log.Warn().Str("module", r.in().Name).Msg("state churn: OnState kept flipping states, giving up")
 }
 
 func (r *runner) render() {
@@ -258,7 +258,7 @@ func (r *runner) render() {
 	})
 	r.mod.Render(w)
 	if err := w.Err(); err != nil {
-		r.eng.logf("%s: render: %v", r.in().Name, err)
+		r.eng.log.Error().Str("module", r.in().Name).Msgf("render: %v", err)
 	}
 	r.publish(w.Segments())
 }
@@ -287,7 +287,7 @@ func (r *runner) chipSegments() []module.Segment {
 // setState flips a state; runner goroutine only.
 func (r *runner) setState(name string, on bool) {
 	if r.in().Table == nil || !r.in().Table.Known(name) {
-		r.eng.logf("%s: unknown state %q", r.in().Name, name)
+		r.eng.log.Warn().Str("module", r.in().Name).Msgf("unknown state %q", name)
 		return
 	}
 	i := slices.Index(r.active, name)
@@ -324,7 +324,7 @@ func (r *runner) stop() {
 	select {
 	case <-loopDone:
 	case <-time.After(stopTimeout):
-		r.eng.logf("%s: stop: goroutine did not settle in %v", r.in().Name, stopTimeout)
+		r.eng.log.Warn().Str("module", r.in().Name).Msgf("stop: goroutine did not settle in %v", stopTimeout)
 		return
 	}
 
@@ -334,7 +334,7 @@ func (r *runner) stop() {
 			defer close(fin)
 			defer func() {
 				if p := recover(); p != nil {
-					r.eng.logf("%s: Stop panic: %v", r.in().Name, p)
+					r.eng.log.Error().Str("module", r.in().Name).Str("stack", string(debug.Stack())).Msgf("Stop panic: %v", p)
 				}
 			}()
 			st.Stop(r.ctx)
@@ -342,7 +342,7 @@ func (r *runner) stop() {
 		select {
 		case <-fin:
 		case <-time.After(stopTimeout):
-			r.eng.logf("%s: Stop hook timed out", r.in().Name)
+			r.eng.log.Warn().Str("module", r.in().Name).Msg("Stop hook timed out")
 		}
 	}
 }
@@ -372,7 +372,7 @@ func hostFor(r *runner) module.Host { return host{r} }
 func (h host) Name() string { return h.r.in().Name }
 
 func (h host) Logf(format string, args ...any) {
-	h.r.eng.logf(h.r.in().Name+": "+format, args...)
+	h.r.eng.log.Info().Str("module", h.r.in().Name).Msgf(format, args...)
 }
 
 func (h host) SetState(name string, on bool) { h.r.setState(name, on) }
@@ -387,7 +387,7 @@ func (h host) Go(fn func()) {
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {
-				h.r.eng.logf("%s: goroutine panic: %v", h.r.in().Name, p)
+				h.r.eng.log.Error().Str("module", h.r.in().Name).Str("stack", string(debug.Stack())).Msgf("goroutine panic: %v", p)
 			}
 		}()
 		fn()
@@ -408,6 +408,6 @@ func (h host) SubscriptionAdded(s *module.Subscription) {
 		r.post(func() { s.Deliver(v) })
 	})
 	if err != nil {
-		r.eng.logf("%s: source: %v", r.in().Name, err)
+		r.eng.log.Error().Str("module", r.in().Name).Msgf("source: %v", err)
 	}
 }

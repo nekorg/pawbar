@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 func TestWatchConfigSignalsOnChange(t *testing.T) {
@@ -16,7 +18,7 @@ func TestWatchConfigSignalsOnChange(t *testing.T) {
 
 	done := make(chan struct{})
 	defer close(done)
-	ch, err := WatchConfig(done, path, t.Logf)
+	ch, err := WatchConfig(done, path, zerolog.New(zerolog.NewTestWriter(t)))
 	if err != nil {
 		t.Fatal(err)
 	}

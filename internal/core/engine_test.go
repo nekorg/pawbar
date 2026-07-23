@@ -9,6 +9,7 @@ import (
 	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/pkg/module"
+	"github.com/rs/zerolog"
 )
 
 // testMod counts renders and exposes a channel source plus a verb.
@@ -84,7 +85,7 @@ func startTestEngine(t *testing.T, yamlSrc string) (*Engine, *config.Bar) {
 	if len(issues) > 0 {
 		t.Fatalf("config issues: %v", issues.Err())
 	}
-	e := New(bar, func(format string, args ...any) { t.Logf("engine: "+format, args...) })
+	e := New(bar, zerolog.New(zerolog.NewTestWriter(t)))
 	e.Start()
 	t.Cleanup(e.Stop)
 	return e, bar
@@ -202,7 +203,7 @@ func TestEngineUnknownModuleChips(t *testing.T) {
 	if len(issues) == 0 {
 		t.Fatal("expected issues")
 	}
-	e := New(bar, t.Logf)
+	e := New(bar, zerolog.New(zerolog.NewTestWriter(t)))
 	e.Start()
 	t.Cleanup(e.Stop)
 

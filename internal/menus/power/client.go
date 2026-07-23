@@ -2,8 +2,8 @@ package power
 
 import (
 	"github.com/nekorg/katnip"
+	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/internal/menus/power/tui"
-	"github.com/nekorg/pawbar/internal/utils"
 )
 
 func LaunchMenu(x, y int) {
@@ -46,7 +46,7 @@ func CreatePanel(x, y, w, h int) *katnip.Panel {
 	}
 
 	kn := katnip.NewPanel("power", conf)
-	utils.Logger.Printf("%s", kn.Cmd.String())
+	logging.Log.Debug().Msgf("%s", kn.Cmd.String())
 	kn.Start()
 
 	return kn

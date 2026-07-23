@@ -11,16 +11,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
+	"runtime/debug"
 
 	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/internal/core"
+	"github.com/nekorg/pawbar/internal/logging"
 	_ "github.com/nekorg/pawbar/internal/modules/builtin"
 	"github.com/nekorg/pawbar/internal/tui"
-	"github.com/nekorg/pawbar/internal/utils"
 	"github.com/nekorg/pawbar/pkg/module"
 )
 
@@ -112,7 +112,7 @@ func checkConfig() int {
 }
 
 func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
-	utils.Logger = log.New(rw, "", log.LstdFlags)
+	log := logging.Setup(rw)
 
 	strictEnv := os.Getenv("PAWBAR_STRICT") != ""
 
@@ -120,34 +120,34 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	bar, compileIssues := config.Compile(f)
 	issues = append(issues, compileIssues...)
 	for _, issue := range issues {
-		utils.Logger.Printf("config: %s", issue.Error())
+		log.Warn().Msgf("config: %s", issue.Error())
 	}
 	if (bar.Settings.Strict || strictEnv) && len(issues) > 0 {
-		utils.Logger.Printf("config: strict mode, refusing to start with %d issue(s)", len(issues))
+		log.Error().Msgf("config: strict mode, refusing to start with %d issue(s)", len(issues))
 		return 1
 	}
 
 	vx, err := vaxis.New(vaxis.Options{EnableSGRPixels: true})
 	if err != nil {
-		utils.Logger.Println("There was an error initializing Vaxis.")
+		log.Error().Msgf("initializing vaxis: %v", err)
 		return 1
 	}
 
 	defer func() {
-		err := recover()
+		p := recover()
 		vx.Close()
-		if err != nil {
-			utils.Logger.Printf("unexpected error: %v\n", err)
+		if p != nil {
+			log.Error().Str("stack", string(debug.Stack())).Msgf("unexpected error: %v", p)
 		}
 	}()
 
 	win := vx.Window()
 	win.Clear()
 
-	engine := core.New(bar, utils.Logger.Printf)
+	engine := core.New(bar, log)
 
 	w, h := win.Size()
-	utils.Logger.Printf("Panel Size (cells): %d, %d\n", w, h)
+	log.Debug().Msgf("panel size (cells): %d, %d", w, h)
 	tui.Init(w, h, bar.Settings)
 	tui.SetSlotCounts(engine.SlotCounts())
 
@@ -158,9 +158,9 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	userSignals := setupUserSignals()
 	resumeCh := watchResume(ctx)
 
-	reloadCh, werr := core.WatchConfig(ctx.Done(), configPath(), utils.Logger.Printf)
+	reloadCh, werr := core.WatchConfig(ctx.Done(), configPath(), log)
 	if werr != nil {
-		utils.Logger.Printf("config: hot reload disabled: %v", werr)
+		log.Warn().Msgf("config: hot reload disabled: %v", werr)
 	}
 
 	engine.Start()
@@ -187,7 +187,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			switch ev := ev.(type) {
 			case vaxis.Resize:
 				fullResize()
-				utils.Logger.Printf("Panel Size: %d, %d\n", ev.XPixel, ev.YPixel)
+				log.Debug().Msgf("panel size: %d, %d", ev.XPixel, ev.YPixel)
 			case vaxis.Redraw:
 				render()
 			case vaxis.Key:
@@ -211,7 +211,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 				}
 				updateMouseShape(vx, shape, &mouseShape)
 			case vaxis.QuitEvent:
-				utils.Logger.Printf("Received exit signal\n")
+				log.Info().Msg("received exit signal")
 				return 0
 			}
 
@@ -230,11 +230,11 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			render()
 
 		case s := <-userSignals:
-			utils.Logger.Printf("full render: %s", canonicalSignalName(s))
+			log.Debug().Msgf("full render: %s", canonicalSignalName(s))
 			fullResize()
 
 		case resumeEv := <-resumeCh:
-			utils.Logger.Printf("waking from suspend (%s)", resumeEv.Source)
+			log.Info().Msgf("waking from suspend (%s)", resumeEv.Source)
 			engine.Wake()
 			fullResize()
 
@@ -243,14 +243,14 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			newBar, ci := config.Compile(nf)
 			nIssues = append(nIssues, ci...)
 			for _, issue := range nIssues {
-				utils.Logger.Printf("config: %s", issue.Error())
+				log.Warn().Msgf("config: %s", issue.Error())
 			}
 			strict := newBar.Settings.Strict || strictEnv
 			if nIssues.Fatal() || (strict && len(nIssues) > 0) {
-				utils.Logger.Printf("config: reload rejected, keeping previous configuration")
+				log.Warn().Msg("config: reload rejected, keeping previous configuration")
 				continue
 			}
-			utils.Logger.Printf("config: reloading")
+			log.Info().Msg("config: reloading")
 			bar = newBar
 			engine.Reload(bar)
 			tui.Init(w, h, bar.Settings)

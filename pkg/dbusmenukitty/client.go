@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nekorg/katnip"
-	"github.com/nekorg/pawbar/internal/utils"
-	"github.com/nekorg/pawbar/pkg/dbusmenukitty/menu"
-	"github.com/nekorg/pawbar/pkg/dbusmenukitty/tui"
 	"github.com/codelif/xdgicons"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/godbus/dbus/v5"
+	"github.com/nekorg/katnip"
+	"github.com/nekorg/pawbar/internal/logging"
+	"github.com/nekorg/pawbar/pkg/dbusmenukitty/menu"
+	"github.com/nekorg/pawbar/pkg/dbusmenukitty/tui"
 )
 
 var iconLookup = xdgicons.NewIconLookupWithConfig(xdgicons.LookupConfig{FallbackTheme: "Adwaita"})
@@ -112,7 +112,7 @@ func LaunchMenu(x, y int) {
 	// Get status
 	var status string
 	client.obj.StoreProperty("com.canonical.dbusmenu.Status", &status)
-	utils.Logger.Printf("Status: %s\n", status)
+	logging.Log.Debug().Msgf("Status: %s", status)
 
 	// Get initial layout
 	layout, err := client.GetLayout()
@@ -120,7 +120,7 @@ func LaunchMenu(x, y int) {
 		log.Fatalf("error getting layout: %v", err)
 	}
 
-	utils.Logger.Printf("Layout retrieved\n")
+	logging.Log.Debug().Msgf("Layout retrieved")
 	// printLayout(layout, 0)
 
 	menuItems := FlattenLayout(layout)
@@ -130,7 +130,7 @@ func LaunchMenu(x, y int) {
 
 func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, parentId int32) {
 	maxHorizontalLength, maxVerticalLength := menu.MaxLengthLabel(menuItems)+4, len(menuItems)
-	utils.Logger.Printf("%d, %d\n", maxHorizontalLength, maxVerticalLength)
+	logging.Log.Debug().Msgf("%d, %d", maxHorizontalLength, maxVerticalLength)
 
 	kn := CreatePanel(x, y, maxHorizontalLength, maxVerticalLength)
 
@@ -163,14 +163,14 @@ func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, pa
 				if err == io.EOF {
 					break
 				}
-				utils.Logger.Printf("error decoding message from panel: %v", err)
+				logging.Log.Warn().Msgf("error decoding message from panel: %v", err)
 				continue
 			}
 
 			switch msg.Type {
 			case menu.MsgItemClicked:
 				if msg.Payload.ItemId == -1 {
-					utils.Logger.Printf("Clicked outside: %d", msg.Payload.ItemId)
+					logging.Log.Debug().Msgf("Clicked outside: %d", msg.Payload.ItemId)
 					sm.CloseAllMenus()
 					closeMsg := menu.Message{
 						Type:    menu.MsgMenuClose,
@@ -180,11 +180,11 @@ func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, pa
 					return
 				}
 				if msg.Payload.ItemId != 0 {
-					utils.Logger.Printf("Item clicked: %d", msg.Payload.ItemId)
+					logging.Log.Debug().Msgf("Item clicked: %d", msg.Payload.ItemId)
 
 					err := client.SendEvent(msg.Payload.ItemId, "clicked", "")
 					if err != nil {
-						utils.Logger.Printf("error sending clicked event: %v", err)
+						logging.Log.Warn().Msgf("error sending clicked event: %v", err)
 					}
 
 					sm.CloseAllMenus()
@@ -198,15 +198,15 @@ func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, pa
 
 			case menu.MsgItemHovered:
 				if msg.Payload.ItemId != 0 {
-					utils.Logger.Printf("Item hovered: %d", msg.Payload.ItemId)
+					logging.Log.Debug().Msgf("Item hovered: %d", msg.Payload.ItemId)
 					err := client.SendEvent(msg.Payload.ItemId, "hovered", "")
 					if err != nil {
-						utils.Logger.Printf("error sending hovered event: %v", err)
+						logging.Log.Warn().Msgf("error sending hovered event: %v", err)
 					}
 				}
 			case menu.MsgSubmenuCancelRequested:
 				if msg.Payload.ItemId != 0 {
-					utils.Logger.Printf("Submenu cancel requested: %d", msg.Payload.ItemId)
+					logging.Log.Debug().Msgf("Submenu cancel requested: %d", msg.Payload.ItemId)
 
 					if submenuPanel, exists := activeSubmenus[msg.Payload.ItemId]; exists {
 						cbor.NewEncoder(submenuPanel.Writer()).Encode(menu.Message{Type: menu.MsgMenuClose})
@@ -218,7 +218,7 @@ func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, pa
 				}
 			case menu.MsgSubmenuRequested:
 				if msg.Payload.ItemId != 0 {
-					utils.Logger.Printf("Submenu requested: %d", msg.Payload.ItemId)
+					logging.Log.Debug().Msgf("Submenu requested: %d", msg.Payload.ItemId)
 
 					for itemId, submenuPanel := range activeSubmenus {
 						cbor.NewEncoder(submenuPanel.Writer()).Encode(menu.Message{Type: menu.MsgMenuClose})
@@ -228,13 +228,13 @@ func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, pa
 
 					needUpdate, err := client.AboutToShow(msg.Payload.ItemId)
 					if err != nil {
-						utils.Logger.Printf("error calling AboutToShow: %v", err)
+						logging.Log.Warn().Msgf("error calling AboutToShow: %v", err)
 					}
 					if needUpdate {
 						// Refresh the layout if needed
 						newLayout, err := client.GetLayoutForParent(parentId)
 						if err != nil {
-							utils.Logger.Printf("error refreshing layout: %v", err)
+							logging.Log.Warn().Msgf("error refreshing layout: %v", err)
 						} else {
 							newMenuItems := FlattenLayout(newLayout)
 							updateMsg := menu.Message{
@@ -250,7 +250,7 @@ func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, pa
 					// Get submenu layout and spawn new panel
 					submenuLayout, err := client.GetLayoutForParent(msg.Payload.ItemId)
 					if err != nil {
-						utils.Logger.Printf("error getting submenu layout: %v", err)
+						logging.Log.Warn().Msgf("error getting submenu layout: %v", err)
 					} else if len(submenuLayout.Children) > 0 {
 						submenuItems := FlattenLayout(submenuLayout)
 						if len(submenuItems) > 0 {
@@ -277,11 +277,11 @@ func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, pa
 		for signal := range ch {
 			switch signal.Name {
 			case "com.canonical.dbusmenu.LayoutUpdated":
-				utils.Logger.Printf("Layout updated signal received for panel %d", parentId)
+				logging.Log.Debug().Msgf("Layout updated signal received for panel %d", parentId)
 				// Refresh layout
 				newLayout, err := client.GetLayoutForParent(parentId)
 				if err != nil {
-					utils.Logger.Printf("error refreshing layout after signal: %v", err)
+					logging.Log.Warn().Msgf("error refreshing layout after signal: %v", err)
 				} else {
 					newMenuItems := FlattenLayout(newLayout)
 					updateMsg := menu.Message{
@@ -293,10 +293,10 @@ func CreateMenuPanel(client *DBusMenuClient, x, y int, menuItems []menu.Item, pa
 					enc.Encode(updateMsg)
 				}
 			case "com.canonical.dbusmenu.ItemsPropertiesUpdated":
-				utils.Logger.Printf("Items properties updated signal received for panel %d", parentId)
+				logging.Log.Debug().Msgf("Items properties updated signal received for panel %d", parentId)
 				newLayout, err := client.GetLayoutForParent(parentId)
 				if err != nil {
-					utils.Logger.Printf("error refreshing layout after properties update: %v", err)
+					logging.Log.Warn().Msgf("error refreshing layout after properties update: %v", err)
 				} else {
 					newMenuItems := FlattenLayout(newLayout)
 					updateMsg := menu.Message{
@@ -421,7 +421,7 @@ func CreatePanel(x, y, w, h int) *katnip.Panel {
 	}
 
 	kn := katnip.NewPanel("leaf", conf)
-	utils.Logger.Printf("%s", kn.Cmd.String())
+	logging.Log.Debug().Msgf("%s", kn.Cmd.String())
 	kn.Start()
 
 	return kn

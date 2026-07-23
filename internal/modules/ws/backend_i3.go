@@ -10,8 +10,8 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/internal/services/i3"
-	"github.com/nekorg/pawbar/internal/utils"
 )
 
 type i3Backend struct {
@@ -41,11 +41,11 @@ func newI3Backend(s *i3.Service) backend {
 func (b *i3Backend) loop() {
 	for e := range b.ev {
 		if evt, ok := e.(i3.I3Event); ok {
-			utils.Logger.Println("DEBUG: ws: i3: Event type:", evt)
+			logging.Log.Debug().Msgf("ws: i3: event type: %v", evt)
 			b.refreshWorkspaceCache()
 			b.signal()
 		} else {
-			utils.Logger.Println("DEBUG: ws: i3: Unknown event type", e)
+			logging.Log.Debug().Msgf("ws: i3: unknown event type: %v", e)
 		}
 	}
 }

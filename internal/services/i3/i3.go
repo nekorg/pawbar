@@ -15,7 +15,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/nekorg/pawbar/internal/utils"
+	"github.com/nekorg/pawbar/internal/logging"
 )
 
 const (
@@ -187,7 +187,7 @@ func readResponse(conn net.Conn) (uint32, []byte, error) {
 func (i *Service) sockMsg() {
 	conn, err := connectToI3()
 	if err != nil {
-		utils.Logger.Println(err)
+		logging.Log.Error().Msgf("i3: %v", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -195,34 +195,34 @@ func (i *Service) sockMsg() {
 	subscription := []string{"window", "workspace"}
 	payload, err := json.Marshal(subscription)
 	if err != nil {
-		utils.Logger.Printf("Error marshaling subscription payload: %v\n", err)
+		logging.Log.Warn().Msgf("Error marshaling subscription payload: %v", err)
 		os.Exit(1)
 	}
 
 	if err := sendI3Message(conn, I3_IPC_MESSAGE_TYPE_SUBSCRIBE, payload); err != nil {
-		utils.Logger.Println(err)
+		logging.Log.Error().Msgf("i3: %v", err)
 		os.Exit(1)
 	}
 
 	ack, err := readI3Ack(conn)
 	if err != nil {
-		utils.Logger.Println(err)
+		logging.Log.Error().Msgf("i3: %v", err)
 		os.Exit(1)
 	}
 
-	utils.Logger.Println("Subscription Acknowledgment:", ack)
+	logging.Log.Debug().Msgf("i3: subscription acknowledgment: %s", ack)
 
 	for {
 		eventType, eventPayload, err := readResponse(conn)
 		if err != nil {
-			utils.Logger.Println("Error reading response:", err)
+			logging.Log.Error().Msgf("i3: reading response: %v", err)
 			break
 		}
 
 		switch eventType {
 		case 0x80000000:
 			if err := json.Unmarshal(eventPayload, &event); err != nil {
-				utils.Logger.Println("Error unmarshaling event:", err)
+				logging.Log.Error().Msgf("i3: unmarshaling event: %v", err)
 				continue
 			}
 
@@ -233,7 +233,7 @@ func (i *Service) sockMsg() {
 			}
 		case 0x80000003:
 			if err := json.Unmarshal(eventPayload, &wevent); err != nil {
-				utils.Logger.Println("Error unmarshaling event:", err)
+				logging.Log.Error().Msgf("i3: unmarshaling event: %v", err)
 				continue
 			}
 
@@ -249,7 +249,7 @@ func (i *Service) sockMsg() {
 func GetWorkspaces() []Workspace {
 	conn, err := connectToI3()
 	if err != nil {
-		utils.Logger.Println(err)
+		logging.Log.Error().Msgf("i3: %v", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -257,20 +257,20 @@ func GetWorkspaces() []Workspace {
 	payload := []byte("")
 
 	if err := sendI3Message(conn, IPC_GET_WORKSPACES, payload); err != nil {
-		utils.Logger.Println(err)
+		logging.Log.Error().Msgf("i3: %v", err)
 		os.Exit(1)
 	}
 
 	eventType, eventPayload, err := readResponse(conn)
-	utils.Logger.Println("event of type:", eventType)
+	logging.Log.Debug().Msgf("i3: event of type: %d", eventType)
 	if err != nil {
-		utils.Logger.Println(err)
+		logging.Log.Error().Msgf("i3: %v", err)
 		return nil
 	}
 
 	var workspaces []Workspace
 	if err = json.Unmarshal(eventPayload, &workspaces); err != nil {
-		utils.Logger.Println("Error unmarshaling JSON:", err)
+		logging.Log.Error().Msgf("i3: unmarshaling JSON: %v", err)
 		return nil
 	}
 
@@ -280,7 +280,7 @@ func GetWorkspaces() []Workspace {
 func GoToWorkspace(name string) {
 	cmd := exec.Command("i3-msg", "workspace", name)
 	if err := cmd.Run(); err != nil {
-		utils.Logger.Printf("Error executing command: %v\n", err)
+		logging.Log.Warn().Msgf("Error executing command: %v", err)
 		os.Exit(1)
 	}
 }
@@ -300,7 +300,7 @@ var isSway = os.Getenv("SWAYSOCK") != ""
 func GetTitleClass() (string, string) {
 	conn, err := connectToI3()
 	if err != nil {
-		utils.Logger.Println(err)
+		logging.Log.Error().Msgf("i3: %v", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -308,20 +308,20 @@ func GetTitleClass() (string, string) {
 	payload := []byte("")
 
 	if err := sendI3Message(conn, msgTypeGetTree, payload); err != nil {
-		utils.Logger.Println(err)
+		logging.Log.Error().Msgf("i3: %v", err)
 		os.Exit(1)
 	}
 
 	eventType, eventPayload, err := readResponse(conn)
-	utils.Logger.Println("event of type:", eventType)
+	logging.Log.Debug().Msgf("i3: event of type: %d", eventType)
 	if err != nil {
-		utils.Logger.Println(err)
+		logging.Log.Error().Msgf("i3: %v", err)
 		return "", ""
 	}
 
 	var root I3Node
 	if err := json.Unmarshal(eventPayload, &root); err != nil {
-		utils.Logger.Printf("Failed to parse JSON: %v\n", err)
+		logging.Log.Warn().Msgf("Failed to parse JSON: %v", err)
 		return "", ""
 	}
 

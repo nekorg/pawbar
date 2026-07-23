@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/nekorg/pawbar/internal/utils"
 	"github.com/godbus/dbus/v5"
+	"github.com/nekorg/pawbar/internal/logging"
 )
 
 const (
@@ -109,19 +109,19 @@ type UPowerDevice struct {
 func ConnectUPower() (*dbus.Conn, <-chan *dbus.Signal, error) {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
-		utils.Logger.Printf("battery: dbus: failed to connect to system bus")
+		logging.Log.Warn().Msgf("battery: dbus: failed to connect to system bus")
 		return nil, nil, err
 	}
 
 	device, err := GetDisplayDevice(conn)
 	if err != nil {
-		utils.Logger.Printf("battery: error getting display device props: %v", err)
+		logging.Log.Warn().Msgf("battery: error getting display device props: %v", err)
 		conn.Close()
 		return nil, nil, err
 	}
 
 	if !IsValidSource(device) {
-		utils.Logger.Printf("battery: no valid power source found")
+		logging.Log.Debug().Msgf("battery: no valid power source found")
 		conn.Close()
 		return nil, nil, fmt.Errorf("no valid power source found")
 	}
@@ -133,7 +133,7 @@ func ConnectUPower() (*dbus.Conn, <-chan *dbus.Signal, error) {
 		dbus.WithMatchInterface(DBUS_PROPS_IFACE),
 		dbus.WithMatchObjectPath(UP_DISPLAY_DEVICE_PATH),
 	); err != nil {
-		utils.Logger.Printf("battery: error matching signal: %v", err)
+		logging.Log.Warn().Msgf("battery: error matching signal: %v", err)
 		conn.Close()
 		return nil, nil, err
 	}
@@ -157,13 +157,13 @@ func GetDisplayDevice(conn *dbus.Conn) (UPowerDevice, error) {
 	var props map[string]dbus.Variant
 	err := c.Store(&props)
 	if err != nil {
-		utils.Logger.Printf("battery: error calling GetAll %v", err)
+		logging.Log.Warn().Msgf("battery: error calling GetAll %v", err)
 		return device, err
 	}
 
 	err = UnmarshalVardict(props, &device)
 	if err != nil {
-		utils.Logger.Printf("battery: unmarshal error: %v", err)
+		logging.Log.Warn().Msgf("battery: unmarshal error: %v", err)
 		return device, err
 	}
 
@@ -213,14 +213,14 @@ func HandleSignal(sig *dbus.Signal, device *UPowerDevice) {
 		return
 	}
 	if len(sig.Body) != 3 {
-		utils.Logger.Printf("battery: upower: invalid signal")
+		logging.Log.Warn().Msgf("battery: upower: invalid signal")
 		return
 	}
 	vardict, ok := sig.Body[1].(map[string]dbus.Variant)
 	if !ok {
-		utils.Logger.Printf("battery: upower: invalid signal")
+		logging.Log.Warn().Msgf("battery: upower: invalid signal")
 		return
 	}
 	UnmarshalVardict(vardict, device)
-	utils.Logger.Printf("battery: upower: signal: %v", sig.Name)
+	logging.Log.Debug().Msgf("battery: upower: signal: %v", sig.Name)
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/introspect"
 	"github.com/godbus/dbus/v5/prop"
-	"github.com/nekorg/pawbar/internal/utils"
+	"github.com/nekorg/pawbar/internal/logging"
 )
 
 const (
@@ -206,7 +206,7 @@ func (s *Service) Start() error {
 
 	// Register as a Host
 	if err := s.registerHost(); err != nil {
-		utils.Logger.Printf("sni: host registration failed: %v\n", err)
+		logging.Log.Warn().Msgf("sni: host registration failed: %v", err)
 	}
 
 	// Bootstrap: fetch current RegisteredStatusNotifierItems
@@ -253,7 +253,7 @@ func (s *Service) ensureWatcher() (owned bool, err error) {
 	case reqErr != nil:
 		return false, reqErr
 	case reply == dbus.RequestNameReplyPrimaryOwner:
-		utils.Logger.Println("sni: acting as StatusNotifierWatcher")
+		logging.Log.Debug().Msg("sni: acting as StatusNotifierWatcher")
 		if err := s.exportWatcher(); err != nil {
 			return false, fmt.Errorf("exporting watcher: %w", err)
 		}
@@ -262,7 +262,7 @@ func (s *Service) ensureWatcher() (owned bool, err error) {
 	case reply == dbus.RequestNameReplyInQueue:
 		return false, fmt.Errorf("sni: watcher name queued unexpectedly")
 	default:
-		utils.Logger.Println("sni: external watcher detected")
+		logging.Log.Debug().Msg("sni: external watcher detected")
 		// Get the current owner
 		var owner string
 		if err := s.conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, nameWatcher).Store(&owner); err == nil {
@@ -281,17 +281,17 @@ func (s *Service) attemptWatcherTakeover() {
 	}
 	s.mu.Unlock()
 
-	utils.Logger.Println("sni: attempting to take over as watcher")
+	logging.Log.Debug().Msg("sni: attempting to take over as watcher")
 
 	// Try to claim the watcher name
 	reply, err := s.conn.RequestName(nameWatcher, dbus.NameFlagDoNotQueue)
 	if err != nil {
-		utils.Logger.Printf("sni: takeover failed: %v\n", err)
+		logging.Log.Warn().Msgf("sni: takeover failed: %v", err)
 		return
 	}
 
 	if reply != dbus.RequestNameReplyPrimaryOwner {
-		utils.Logger.Println("sni: another watcher took over first")
+		logging.Log.Debug().Msg("sni: another watcher took over first")
 		// Update our watcher reference
 		var owner string
 		if err := s.conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, nameWatcher).Store(&owner); err == nil {
@@ -303,7 +303,7 @@ func (s *Service) attemptWatcherTakeover() {
 	}
 
 	// We got it! Transition to being the watcher
-	utils.Logger.Println("sni: successfully became the watcher")
+	logging.Log.Debug().Msg("sni: successfully became the watcher")
 
 	s.mu.Lock()
 	s.owned = true
@@ -318,7 +318,7 @@ func (s *Service) attemptWatcherTakeover() {
 
 	// Export watcher interface
 	if err := s.exportWatcher(); err != nil {
-		utils.Logger.Printf("sni: failed to export watcher interface: %v\n", err)
+		logging.Log.Warn().Msgf("sni: failed to export watcher interface: %v", err)
 		s.conn.ReleaseName(nameWatcher)
 		s.mu.Lock()
 		s.owned = false
@@ -344,7 +344,7 @@ func (s *Service) attemptWatcherTakeover() {
 		go s.monitorItemBus(it)
 	}
 
-	utils.Logger.Printf("sni: inherited %d items from previous watcher\n", len(existingItems))
+	logging.Log.Debug().Msgf("sni: inherited %d items from previous watcher", len(existingItems))
 }
 
 // Watcher implementation
@@ -373,7 +373,7 @@ func (w *watcherServer) RegisterStatusNotifierItem(sender dbus.Sender, service s
 
 	// IMPORTANT: Store items by their original bus name, not resolved unique names
 	// This ensures consistent keying
-	utils.Logger.Printf("sni: registering item %s%s (sender: %s)\n", bus, path, sender)
+	logging.Log.Debug().Msgf("sni: registering item %s%s (sender: %s)", bus, path, sender)
 
 	w.s.trackItem(bus, dbus.ObjectPath(path))
 
@@ -385,7 +385,7 @@ func (w *watcherServer) RegisterStatusNotifierItem(sender dbus.Sender, service s
 }
 
 func (w *watcherServer) RegisterStatusNotifierHost(sender dbus.Sender, service string) *dbus.Error {
-	utils.Logger.Printf("sni: registering host %s\n", service)
+	logging.Log.Debug().Msgf("sni: registering host %s", service)
 
 	w.s.mu.Lock()
 	w.s.hosts[service] = true
@@ -555,7 +555,7 @@ func (s *Service) bootstrapItems() {
 	var items []string
 	if err := s.watcher.Call("org.freedesktop.DBus.Properties.Get", 0,
 		ifaceWatcher, "RegisteredStatusNotifierItems").Store(&items); err != nil {
-		utils.Logger.Printf("sni: bootstrap failed: %v\n", err)
+		logging.Log.Warn().Msgf("sni: bootstrap failed: %v", err)
 		return
 	}
 
@@ -570,18 +570,18 @@ func (s *Service) bootstrapItems() {
 func (s *Service) trackItem(bus string, path dbus.ObjectPath) {
 	key := bus + string(path)
 
-	utils.Logger.Printf("sni: trackItem called - bus:%s path:%s key:%s\n", bus, path, key)
+	logging.Log.Debug().Msgf("sni: trackItem called - bus:%s path:%s key:%s", bus, path, key)
 
 	s.mu.Lock()
 	if _, exists := s.items[key]; exists {
 		s.mu.Unlock()
-		utils.Logger.Printf("sni: item %s already tracked\n", key)
+		logging.Log.Debug().Msgf("sni: item %s already tracked", key)
 		return
 	}
 
 	it := &Item{BusName: bus, Path: path}
 	s.items[key] = it
-	utils.Logger.Printf("sni: added item %s to tracking\n", key)
+	logging.Log.Debug().Msgf("sni: added item %s to tracking", key)
 	s.mu.Unlock()
 
 	// Update property if we're the watcher
@@ -633,24 +633,24 @@ func (s *Service) removeByPath(path dbus.ObjectPath) {
 }
 
 func (s *Service) removeByKey(key string) {
-	utils.Logger.Printf("sni: removeByKey called for %s\n", key)
+	logging.Log.Debug().Msgf("sni: removeByKey called for %s", key)
 
 	s.mu.Lock()
 	it, exists := s.items[key]
 	if !exists {
-		utils.Logger.Printf("sni: key %s not found in items map\n", key)
+		logging.Log.Debug().Msgf("sni: key %s not found in items map", key)
 		// List all current keys for debugging
 		var keys []string
 		for k := range s.items {
 			keys = append(keys, k)
 		}
-		utils.Logger.Printf("sni: current items: %v\n", keys)
+		logging.Log.Debug().Msgf("sni: current items: %v", keys)
 		s.mu.Unlock()
 		return
 	}
 
 	delete(s.items, key)
-	utils.Logger.Printf("sni: removed item %s from map\n", key)
+	logging.Log.Debug().Msgf("sni: removed item %s from map", key)
 
 	// Update property if we're the watcher
 	if s.owned && s.props != nil {
@@ -662,9 +662,9 @@ func (s *Service) removeByKey(key string) {
 	// Emit unregistered signal if we're the watcher (must be outside lock)
 	if wasOwned {
 		// Emit the signal that other hosts are listening for
-		utils.Logger.Printf("sni: emitting StatusNotifierItemUnregistered for %s\n", key)
+		logging.Log.Debug().Msgf("sni: emitting StatusNotifierItemUnregistered for %s", key)
 		if err := s.conn.Emit(pathWatcher, sigItemUnregistered, key); err != nil {
-			utils.Logger.Printf("sni: failed to emit unregistered signal: %v\n", err)
+			logging.Log.Warn().Msgf("sni: failed to emit unregistered signal: %v", err)
 		}
 	}
 
@@ -810,7 +810,7 @@ func (s *Service) loop() {
 						s.mu.RUnlock()
 
 						if wasOurWatcher && !wasOwned {
-							utils.Logger.Println("sni: external watcher disappeared")
+							logging.Log.Debug().Msg("sni: external watcher disappeared")
 							// Give a small delay for other services to claim it first
 							time.Sleep(100 * time.Millisecond)
 							s.attemptWatcherTakeover()
@@ -823,7 +823,7 @@ func (s *Service) loop() {
 						s.mu.Lock()
 						if !s.owned {
 							s.watcherOwner = newo
-							utils.Logger.Printf("sni: new external watcher appeared: %s\n", newo)
+							logging.Log.Debug().Msgf("sni: new external watcher appeared: %s", newo)
 							// Re-register as host with new watcher
 							s.mu.Unlock()
 							s.watcher = s.conn.Object(nameWatcher, pathWatcher)
@@ -856,7 +856,7 @@ func (s *Service) loop() {
 						s.mu.RUnlock()
 
 						if removed {
-							utils.Logger.Printf("sni: service disappeared: %s (was %s)\n", name, old)
+							logging.Log.Debug().Msgf("sni: service disappeared: %s (was %s)", name, old)
 							s.purgeByBus(old)
 							if name != "" && name != old {
 								s.purgeByBus(name)
@@ -958,7 +958,7 @@ func (s *Service) watchItemProps(it *Item) {
 // monitorItemBus watches for when an item's bus connection dies (only when we're the watcher)
 func (s *Service) monitorItemBus(it *Item) {
 	key := it.BusName + string(it.Path)
-	utils.Logger.Printf("sni: starting monitor for item %s\n", key)
+	logging.Log.Debug().Msgf("sni: starting monitor for item %s", key)
 
 	// For unique names (:1.x), we can watch NameOwnerChanged
 	// For well-known names, we need to resolve to unique name first
@@ -970,13 +970,13 @@ func (s *Service) monitorItemBus(it *Item) {
 		var owner string
 		err := s.conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, busToWatch).Store(&owner)
 		if err != nil {
-			utils.Logger.Printf("sni: can't resolve owner for %s: %v\n", busToWatch, err)
+			logging.Log.Warn().Msgf("sni: can't resolve owner for %s: %v", busToWatch, err)
 			// Can't resolve, maybe it's already gone?
 			s.removeByKey(key)
 			return
 		}
 		uniqueName = owner
-		utils.Logger.Printf("sni: resolved %s to unique name %s\n", busToWatch, uniqueName)
+		logging.Log.Debug().Msgf("sni: resolved %s to unique name %s", busToWatch, uniqueName)
 	} else {
 		uniqueName = busToWatch
 	}
@@ -995,7 +995,7 @@ func (s *Service) monitorItemBus(it *Item) {
 	for {
 		select {
 		case <-s.stop:
-			utils.Logger.Printf("sni: stopping monitor for %s (service stopping)\n", key)
+			logging.Log.Debug().Msgf("sni: stopping monitor for %s (service stopping)", key)
 			return
 
 		case <-ticker.C:
@@ -1005,12 +1005,12 @@ func (s *Service) monitorItemBus(it *Item) {
 			s.mu.RUnlock()
 
 			if !stillTracked {
-				utils.Logger.Printf("sni: item %s no longer tracked, stopping monitor\n", key)
+				logging.Log.Debug().Msgf("sni: item %s no longer tracked, stopping monitor", key)
 				return
 			}
 
 			if !s.itemStillExists(it) {
-				utils.Logger.Printf("sni: item %s no longer exists (health check failed)\n", key)
+				logging.Log.Warn().Msgf("sni: item %s no longer exists (health check failed)", key)
 				s.removeByKey(key)
 				return
 			}
@@ -1029,7 +1029,7 @@ func (s *Service) monitorItemBus(it *Item) {
 				if old != "" && newo == "" {
 					if name == uniqueName || name == it.BusName ||
 						(uniqueName != "" && old == uniqueName) {
-						utils.Logger.Printf("sni: detected disconnect - name:%s old:%s new:%s (monitoring %s/%s)\n",
+						logging.Log.Debug().Msgf("sni: detected disconnect - name:%s old:%s new:%s (monitoring %s/%s)",
 							name, old, newo, it.BusName, uniqueName)
 						s.removeByKey(key)
 						return
@@ -1103,9 +1103,9 @@ func (s *Service) emit(ev Event) {
 	// Debug logging
 	switch ev.Kind {
 	case ItemAdded:
-		utils.Logger.Printf("sni: emitting ItemAdded for %s\n", ev.ID)
+		logging.Log.Debug().Msgf("sni: emitting ItemAdded for %s", ev.ID)
 	case ItemRemoved:
-		utils.Logger.Printf("sni: emitting ItemRemoved for %s\n", ev.ID)
+		logging.Log.Debug().Msgf("sni: emitting ItemRemoved for %s", ev.ID)
 	case ItemChanged:
 		// Less verbose for changes
 	}
@@ -1119,7 +1119,7 @@ func (s *Service) emit(ev Event) {
 		select {
 		case ch <- ev:
 		default:
-			utils.Logger.Printf("sni: listener channel full, dropping event %v\n", ev.Kind)
+			logging.Log.Warn().Msgf("sni: listener channel full, dropping event %v", ev.Kind)
 		}
 	}
 }

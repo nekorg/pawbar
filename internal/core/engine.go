@@ -12,6 +12,7 @@ import (
 	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/pkg/module"
+	"github.com/rs/zerolog"
 )
 
 // Side indexes the three bar anchors.
@@ -33,7 +34,7 @@ type Update struct {
 // Engine owns all runners and routes input to them. Its exported methods
 // are meant for the single main loop goroutine.
 type Engine struct {
-	logf    func(format string, args ...any)
+	log     zerolog.Logger
 	updates chan Update
 
 	// mu guards sides for the one cross-goroutine reader (push, from
@@ -49,9 +50,9 @@ type Engine struct {
 }
 
 // New builds an engine for a compiled bar. Call Start to launch modules.
-func New(bar *config.Bar, logf func(string, ...any)) *Engine {
+func New(bar *config.Bar, log zerolog.Logger) *Engine {
 	e := &Engine{
-		logf:     logf,
+		log:      log,
 		updates:  make(chan Update, 64),
 		restarts: make(chan SlotRef, 16),
 	}

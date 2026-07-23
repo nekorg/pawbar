@@ -50,18 +50,18 @@ func (e *Engine) runAction(r *runner, a module.Action, region string, x, y int) 
 	case a.Verb != "":
 		fn, ok := r.ctx.Verb(a.Verb)
 		if !ok {
-			e.logf("%s: verb %q declared but not bound in Init", r.in().Name, a.Verb)
+			e.log.Warn().Str("module", r.in().Name).Msgf("verb %q declared but not bound in Init", a.Verb)
 			return
 		}
 		if err := fn(module.VerbArgs{Args: a.Args, Region: region, XPixel: x, YPixel: y}); err != nil {
-			e.logf("%s: %s: %v", r.in().Name, a.Verb, err)
+			e.log.Error().Str("module", r.in().Name).Msgf("%s: %v", a.Verb, err)
 		}
 
 	case len(a.Run) > 0:
 		argv := a.Run
 		r.ctx.Go(func() {
 			if err := exec.Command(argv[0], argv[1:]...).Start(); err != nil {
-				e.logf("%s: run %v: %v", r.in().Name, argv, err)
+				e.log.Error().Str("module", r.in().Name).Msgf("run %v: %v", argv, err)
 			}
 		})
 

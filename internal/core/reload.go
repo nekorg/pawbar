@@ -13,6 +13,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/pkg/module"
+	"github.com/rs/zerolog"
 )
 
 const reloadDebounce = 250 * time.Millisecond
@@ -21,7 +22,7 @@ const reloadDebounce = 250 * time.Millisecond
 // by rename, so watching the file itself would go stale) and delivers a
 // debounced signal whenever the config file may have changed. The watcher
 // stops when done closes.
-func WatchConfig(done <-chan struct{}, path string, logf func(string, ...any)) (<-chan struct{}, error) {
+func WatchConfig(done <-chan struct{}, path string, log zerolog.Logger) (<-chan struct{}, error) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
@@ -58,7 +59,7 @@ func WatchConfig(done <-chan struct{}, path string, logf func(string, ...any)) (
 				if !ok {
 					return
 				}
-				logf("config watch: %v", err)
+				log.Warn().Msgf("config watch: %v", err)
 			case <-timerC:
 				timer, timerC = nil, nil
 				select {
