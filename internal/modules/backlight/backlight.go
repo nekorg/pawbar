@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/jochenvg/go-udev"
+	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/internal/utils"
 	"github.com/nekorg/pawbar/pkg/module"
 )
@@ -59,15 +60,18 @@ func udevSource() module.Source[struct{}] {
 			return nil, err
 		}
 		go func() {
+			defer logging.Recover("backlight.udev")
 			for {
 				select {
 				case d, ok := <-devChan:
 					if !ok || d == nil {
+						logging.Log.Warn().Msg("backlight: udev monitor closed; live brightness updates stopped")
 						return
 					}
 					emit(struct{}{})
 				case e := <-errChan:
 					if e != nil {
+						logging.Log.Warn().Msgf("backlight: udev monitor: %v; live brightness updates stopped", e)
 						return
 					}
 				case <-cctx.Done():

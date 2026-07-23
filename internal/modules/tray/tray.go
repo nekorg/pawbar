@@ -75,9 +75,13 @@ func (m *trayModule) OnMouse(ctx *module.Ctx, ev module.Mouse) {
 
 	switch ev.Button {
 	case "left":
-		_ = m.svc.Activate(item, x, y)
+		if err := m.svc.Activate(item, x, y); err != nil {
+			ctx.Log("activate: %v", err)
+		}
 	case "middle":
-		_ = m.svc.SecondaryActivate(item, x, y)
+		if err := m.svc.SecondaryActivate(item, x, y); err != nil {
+			ctx.Log("secondary activate: %v", err)
+		}
 	case "right":
 		if item.MenuPath != "" {
 			// TODO: this assumes 2x scale, use pkg/monitor to determine
@@ -89,9 +93,13 @@ func (m *trayModule) OnMouse(ctx *module.Ctx, ev module.Mouse) {
 			ctx.Log("context menu: %v", err)
 		}
 	case "scroll-up":
-		_ = m.svc.Scroll(item, +120, "vertical")
+		if err := m.svc.Scroll(item, +120, "vertical"); err != nil {
+			ctx.Log("scroll: %v", err)
+		}
 	case "scroll-down":
-		_ = m.svc.Scroll(item, -120, "vertical")
+		if err := m.svc.Scroll(item, -120, "vertical"); err != nil {
+			ctx.Log("scroll: %v", err)
+		}
 	}
 }
 

@@ -165,7 +165,8 @@ func Render(win vaxis.Window) {
 				}
 				gapLen := gapEnd - gapStart + 1
 				if gapLen <= 0 {
-					return
+					// No room for this block; later blocks may still fit.
+					break
 				}
 				if gapLen-2*ellW > 0 {
 					visible := trimMiddle(block.cells, gapLen, useEllipsis)

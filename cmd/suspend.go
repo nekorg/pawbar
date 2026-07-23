@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/nekorg/pawbar/internal/logging"
 )
-
 
 type ResumeEvent struct{ Source string }
 
@@ -24,6 +24,7 @@ func watchResume(ctx context.Context) <-chan ResumeEvent {
 
 		bus, err := dbus.ConnectSystemBus()
 		if err != nil {
+			logging.Log.Warn().Msgf("resume watch disabled: system bus: %v", err)
 			return
 		}
 		defer bus.Close()
@@ -38,10 +39,13 @@ func watchResume(ctx context.Context) <-chan ResumeEvent {
 			dbus.WithMatchInterface("org.freedesktop.UPower"),
 			dbus.WithMatchMember("Resuming"),
 		}
-		
-		// TODO: properly handle errors
-		_ = bus.AddMatchSignal(logindOpts...)
-		_ = bus.AddMatchSignal(upowerOpts...)
+
+		if err := bus.AddMatchSignal(logindOpts...); err != nil {
+			logging.Log.Warn().Msgf("resume watch: login1 match: %v", err)
+		}
+		if err := bus.AddMatchSignal(upowerOpts...); err != nil {
+			logging.Log.Warn().Msgf("resume watch: upower match: %v", err)
+		}
 		defer func() {
 			_ = bus.RemoveMatchSignal(logindOpts...)
 			_ = bus.RemoveMatchSignal(upowerOpts...)
@@ -76,11 +80,17 @@ func watchResume(ctx context.Context) <-chan ResumeEvent {
 							continue // going to sleep
 						}
 						last = now
-						select { case out <- ResumeEvent{Source: "login1"}: default: }
+						select {
+						case out <- ResumeEvent{Source: "login1"}:
+						default:
+						}
 					}
 				case "org.freedesktop.UPower.Resuming":
 					last = now
-					select { case out <- ResumeEvent{Source: "UPower"}: default: }
+					select {
+					case out <- ResumeEvent{Source: "UPower"}:
+					default:
+					}
 				}
 			}
 		}

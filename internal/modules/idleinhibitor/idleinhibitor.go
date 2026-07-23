@@ -72,7 +72,9 @@ func (m *idleModule) Init(ctx *module.Ctx) error {
 
 func (m *idleModule) Stop(ctx *module.Ctx) {
 	if m.inhibiting {
-		_ = m.closeRequest()
+		if err := m.closeRequest(); err != nil {
+			ctx.Log("releasing idle inhibition: %v", err)
+		}
 	}
 }
 

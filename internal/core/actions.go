@@ -60,15 +60,24 @@ func (e *Engine) runAction(r *runner, a module.Action, region string, x, y int) 
 	case len(a.Run) > 0:
 		argv := a.Run
 		r.ctx.Go(func() {
-			if err := exec.Command(argv[0], argv[1:]...).Start(); err != nil {
+			cmd := exec.Command(argv[0], argv[1:]...)
+			if err := cmd.Start(); err != nil {
 				e.log.Error().Str("module", r.in().Name).Msgf("run %v: %v", argv, err)
+				return
 			}
+			// Reap the child; fire-and-forget leaves a zombie per click.
+			cmd.Wait()
 		})
 
 	case a.Notify != "":
 		msg := a.Notify
 		r.ctx.Go(func() {
-			_ = exec.Command("notify-send", msg).Start()
+			cmd := exec.Command("notify-send", msg)
+			if err := cmd.Start(); err != nil {
+				e.log.Error().Str("module", r.in().Name).Msgf("notify: %v", err)
+				return
+			}
+			cmd.Wait()
 		})
 
 	case a.Set != "":

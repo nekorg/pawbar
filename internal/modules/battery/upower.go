@@ -198,6 +198,11 @@ func UnmarshalVardict(vardict map[string]dbus.Variant, out interface{}) error {
 		}
 
 		variantVal := reflect.ValueOf(variant.Value())
+		if !variantVal.IsValid() {
+			// A nil variant value yields the zero reflect.Value, on
+			// which Type() panics.
+			continue
+		}
 		if !variantVal.Type().AssignableTo(field.Type) {
 			return fmt.Errorf("cannot assign value of type %s to field %s (type %s)", variantVal.Type(), field.Name, field.Type)
 		}

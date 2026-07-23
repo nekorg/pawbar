@@ -26,7 +26,10 @@ func (m *batteryModule) Init(ctx *module.Ctx) error {
 		return err
 	}
 	m.conn = conn
-	m.device, _ = GetDisplayDevice(conn)
+	m.device, err = GetDisplayDevice(conn)
+	if err != nil {
+		ctx.Log("display device query: %v", err)
+	}
 	m.applyStates(ctx)
 
 	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) {

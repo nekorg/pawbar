@@ -21,7 +21,9 @@ type bluetoothModule struct {
 }
 
 func (m *bluetoothModule) Init(ctx *module.Ctx) error {
-	conn, err := dbus.SystemBus()
+	// Private connection: Stop closes it, and closing the shared
+	// dbus.SystemBus() connection would break every other consumer.
+	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		return fmt.Errorf("system bus: %w", err)
 	}

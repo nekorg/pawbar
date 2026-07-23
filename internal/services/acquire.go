@@ -9,6 +9,8 @@ package services
 import (
 	"sync"
 	"time"
+
+	"github.com/nekorg/pawbar/internal/logging"
 )
 
 // Refcounted service acquisition for the new module runtime. A service
@@ -84,6 +86,8 @@ func stopIfIdle(name string) {
 	acqMu.Unlock()
 
 	if s, ok := a.svc.(interface{ Stop() error }); ok {
-		_ = s.Stop()
+		if err := s.Stop(); err != nil {
+			logging.Log.Warn().Msgf("service %s: stop: %v", name, err)
+		}
 	}
 }
