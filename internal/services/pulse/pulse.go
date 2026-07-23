@@ -10,15 +10,21 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/codelif/pulseaudio"
+	"github.com/nekorg/pawbar/internal/logging"
 )
 
+const maxBackoff = 30 * time.Second
+
 type PulseService struct {
-	running bool
-	exit    chan bool
-	client  *pulseaudio.Client
+	running atomic.Bool
+	exit    chan struct{}
+
+	cmu    sync.RWMutex
+	client *pulseaudio.Client
 
 	lmu       sync.Mutex
 	listeners []chan SinkEvent
@@ -56,7 +62,7 @@ func (p *PulseService) RemoveListener(l <-chan SinkEvent) {
 }
 
 func (p *PulseService) Start() error {
-	if p.running {
+	if p.running.Load() {
 		return nil
 	}
 
@@ -64,56 +70,127 @@ func (p *PulseService) Start() error {
 	if err != nil {
 		return err
 	}
-	p.client = client
 
 	events, err := client.Events()
 	if err != nil {
+		client.Close()
 		return err
 	}
 
-	p.exit = make(chan bool)
-	p.running = true
+	p.client = client
+	p.exit = make(chan struct{})
+	p.running.Store(true)
 
-	go func() {
-		for p.running {
-			select {
-			case e := <-events:
-				if e.Op == pulseaudio.EvChange && (e.Facility == pulseaudio.EvSink || e.Facility == pulseaudio.EvSource) {
-					sink, err := p.GetDefaultSinkInfo()
-					if err != nil {
-						continue
-					}
-					p.lmu.Lock()
-					listeners := slices.Clone(p.listeners)
-					p.lmu.Unlock()
-					for _, ch := range listeners {
-						// Non-blocking: a stale listener must never
-						// wedge the broadcast for everyone else.
-						select {
-						case ch <- sink:
-						default:
-						}
-					}
-				}
-			case <-p.exit:
-				p.running = false
-			}
-		}
-	}()
+	go p.loop(events)
 
 	return nil
 }
 
+func (p *PulseService) loop(events <-chan pulseaudio.Event) {
+	defer logging.Recover("pulse.loop")
+	for {
+		select {
+		case <-p.exit:
+			return
+		case e, ok := <-events:
+			if !ok {
+				// PulseAudio went away and closed the event channel.
+				events = p.reconnect()
+				if events == nil {
+					return
+				}
+				continue
+			}
+			if e.Op == pulseaudio.EvChange && (e.Facility == pulseaudio.EvSink || e.Facility == pulseaudio.EvSource) {
+				sink, err := p.GetDefaultSinkInfo()
+				if err != nil {
+					continue
+				}
+				p.broadcast(sink)
+			}
+		}
+	}
+}
+
+// reconnect re-establishes the PulseAudio connection with backoff,
+// returning the fresh event channel, or nil when the service stops
+// first.
+func (p *PulseService) reconnect() <-chan pulseaudio.Event {
+	logging.Log.Warn().Msg("pulse: connection lost; reconnecting")
+	backoff := time.Second
+	for {
+		select {
+		case <-p.exit:
+			return nil
+		default:
+		}
+
+		client, err := pulseaudio.NewClient("")
+		if err == nil {
+			var events <-chan pulseaudio.Event
+			events, err = client.Events()
+			if err == nil {
+				p.cmu.Lock()
+				old := p.client
+				p.client = client
+				p.cmu.Unlock()
+				if old != nil {
+					old.Close()
+				}
+				logging.Log.Info().Msg("pulse: reconnected")
+				if sink, serr := p.GetDefaultSinkInfo(); serr == nil {
+					p.broadcast(sink)
+				}
+				return events
+			}
+			client.Close()
+		}
+
+		logging.Log.Error().Msgf("pulse: reconnect: %v (retry in %v)", err, backoff)
+		select {
+		case <-p.exit:
+			return nil
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, maxBackoff)
+	}
+}
+
+func (p *PulseService) broadcast(sink SinkEvent) {
+	p.lmu.Lock()
+	listeners := slices.Clone(p.listeners)
+	p.lmu.Unlock()
+	for _, ch := range listeners {
+		// Non-blocking: a stale listener must never wedge the
+		// broadcast for everyone else.
+		select {
+		case ch <- sink:
+		default:
+		}
+	}
+}
+
+// c returns the current client; it changes across reconnects.
+func (p *PulseService) c() *pulseaudio.Client {
+	p.cmu.RLock()
+	defer p.cmu.RUnlock()
+	return p.client
+}
+
 func (p *PulseService) GetDefaultSink() (pulseaudio.Sink, error) {
-	if !p.running {
+	if !p.running.Load() {
 		return pulseaudio.Sink{}, fmt.Errorf("pulse service not running")
 	}
-	serverInfo, err := p.client.ServerInfo()
+	client := p.c()
+	if client == nil {
+		return pulseaudio.Sink{}, fmt.Errorf("pulse service not running")
+	}
+	serverInfo, err := client.ServerInfo()
 	if err != nil {
 		return pulseaudio.Sink{}, err
 	}
 
-	sinks, err := p.client.Sinks()
+	sinks, err := client.Sinks()
 	if err != nil {
 		return pulseaudio.Sink{}, err
 	}
@@ -130,22 +207,25 @@ func (p *PulseService) GetDefaultSink() (pulseaudio.Sink, error) {
 }
 
 func (p *PulseService) Stop() error {
-	if !p.running {
+	if !p.running.Load() {
 		return nil
 	}
+	p.running.Store(false)
+	close(p.exit)
 
-	select {
-	case <-time.After(2 * time.Second):
-		return fmt.Errorf("could not stop")
-	case p.exit <- true:
-		p.running = false
+	p.cmu.Lock()
+	client := p.client
+	p.client = nil
+	p.cmu.Unlock()
+	if client != nil {
+		client.Close()
 	}
 
 	return nil
 }
 
 func (p *PulseService) GetDefaultSinkInfo() (SinkEvent, error) {
-	if !p.running {
+	if !p.running.Load() {
 		return SinkEvent{}, fmt.Errorf("pulse service not running")
 	}
 
@@ -154,25 +234,49 @@ func (p *PulseService) GetDefaultSinkInfo() (SinkEvent, error) {
 		return SinkEvent{}, err
 	}
 
+	volume := 0.0
+	if len(sink.Cvolume) > 0 {
+		volume = float64(float32(sink.Cvolume[0])/0xffff) * 100
+	}
+
 	return SinkEvent{
 		Sink:   sink.Name,
-		Volume: float64(float32(sink.Cvolume[0])/0xffff) * 100,
+		Volume: volume,
 		Muted:  sink.Muted,
 	}, nil
 }
 
 // SetSinkVolume sets the sink volume as a percentage (0-100+).
 func (p *PulseService) SetSinkVolume(sink string, volume float64) error {
-	if !p.running {
+	if !p.running.Load() {
 		return fmt.Errorf("pulse service not running")
 	}
-	return p.client.SetSinkVolume(sink, float32(volume/100))
+	client := p.c()
+	if client == nil {
+		return fmt.Errorf("pulse service not running")
+	}
+	return client.SetSinkVolume(sink, float32(volume/100))
 }
 
-// SetSinkMute mutes or unmutes the default sink.
+// SetSinkMute mutes or unmutes the default sink. The underlying client
+// can only address the default sink, so any other name is an error
+// rather than being silently redirected.
 func (p *PulseService) SetSinkMute(sink string, mute bool) error {
-	if !p.running {
+	if !p.running.Load() {
 		return fmt.Errorf("pulse service not running")
 	}
-	return p.client.SetMute(mute)
+	client := p.c()
+	if client == nil {
+		return fmt.Errorf("pulse service not running")
+	}
+	if sink != "" {
+		info, err := client.ServerInfo()
+		if err != nil {
+			return err
+		}
+		if sink != info.DefaultSink {
+			return fmt.Errorf("can only mute the default sink (%s), not %s", info.DefaultSink, sink)
+		}
+	}
+	return client.SetMute(mute)
 }
