@@ -1,53 +1,74 @@
 package session
 
 import (
-	"github.com/nekorg/katnip"
+	"fmt"
+	"os"
+
+	"github.com/godbus/dbus/v5"
 	"github.com/nekorg/pawbar/internal/logging"
-	"github.com/nekorg/pawbar/internal/menus/session/tui"
+	"github.com/nekorg/pawbar/pkg/menus"
 )
 
-func LaunchMenu(x, y int) {
-	kn := CreatePanel(x, y, 12, 4)
-	kn.Wait()
-}
-
-func init() {
-	katnip.RegisterFunc("session", tui.Panel)
-}
-
-func CreatePanel(x, y, w, h int) *katnip.Panel {
-	conf := katnip.Config{
-		Position: katnip.Vector{X: x, Y: y},
-		Size:     katnip.Vector{X: w, Y: h},
-		Edge:     katnip.EdgeNone,
-		Layer:    katnip.LayerTop,
-		// FocusPolicy: katnip.FocusNotAllowed,
-		FocusPolicy: katnip.FocusExclusive,
-		ConfigFile:  "NONE",
-		KittyOverrides: []string{
-			"font_size=12",
-			"cursor_trail=0",
-			"cursor_shape=beam",
-			"cursor=#000000",
-			"paste_actions=replace-dangerous-control-codes",
-			"map kitty_mod+equal       no_op",
-			"map kitty_mod+plus        no_op",
-			"map kitty_mod+kp_add      no_op",
-			"map cmd+plus              no_op",
-			"map cmd+equal             no_op",
-			"map shift+cmd+equal       no_op",
-			"map kitty_mod+minus       no_op",
-			"map kitty_mod+kp_subtract no_op",
-			"map cmd+minus             no_op",
-			"map shift+cmd+minus       no_op",
-			"map kitty_mod+backspace   no_op",
-			"map cmd+0                 no_op",
-		},
+// Menu builds the session-controls menu (reboot, poweroff, suspend,
+// logout). Actions go through logind on the system bus; the connection
+// lives for the menu's lifetime.
+func Menu() *menus.List {
+	conn, obj, err := connect()
+	if err != nil {
+		logging.Log.Error().Msgf("session menu: %v", err)
+		return &menus.List{Items: []menus.Item{
+			{Label: "logind unavailable", Disabled: true},
+		}}
 	}
 
-	kn := katnip.NewPanel("session", conf)
-	logging.Log.Debug().Msgf("%s", kn.Cmd.String())
-	kn.Start()
+	call := func(fn func(dbus.BusObject)) func() {
+		return func() { fn(obj) }
+	}
+	return &menus.List{
+		Items: []menus.Item{
+			{Glyph: "󰜉", Label: "Reboot", OnClick: call(reboot)},
+			{Glyph: "", Label: "Poweroff", OnClick: call(poweroff)},
+			{Glyph: "󰤄", Label: "Suspend", OnClick: call(suspend)},
+			{Glyph: "󰍃", Label: "Logout", OnClick: call(terminateSession)},
+		},
+		OnClose: func() { conn.Close() },
+	}
+}
 
-	return kn
+func connect() (*dbus.Conn, dbus.BusObject, error) {
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to connect system bus: %w", err)
+	}
+	obj := conn.Object(
+		"org.freedesktop.login1",
+		"/org/freedesktop/login1",
+	)
+	return conn, obj, nil
+}
+
+func reboot(obj dbus.BusObject) {
+	logCall(obj.Call("org.freedesktop.login1.Manager.Reboot", 0, true))
+}
+
+func poweroff(obj dbus.BusObject) {
+	logCall(obj.Call("org.freedesktop.login1.Manager.PowerOff", 0, true))
+}
+
+func suspend(obj dbus.BusObject) {
+	logCall(obj.Call("org.freedesktop.login1.Manager.Suspend", 0, true))
+}
+
+func terminateSession(obj dbus.BusObject) {
+	sessID := os.Getenv("XDG_SESSION_ID")
+	if sessID == "" {
+		return
+	}
+	logCall(obj.Call("org.freedesktop.login1.Manager.TerminateSession", 0, sessID))
+}
+
+func logCall(call *dbus.Call) {
+	if call.Err != nil {
+		logging.Log.Error().Msgf("session menu: %v", call.Err)
+	}
 }

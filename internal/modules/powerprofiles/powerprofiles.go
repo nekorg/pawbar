@@ -12,7 +12,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"github.com/nekorg/pawbar/internal/menus/power"
-	"github.com/nekorg/pawbar/internal/scale"
+	"github.com/nekorg/pawbar/pkg/menus"
 	"github.com/nekorg/pawbar/pkg/module"
 )
 
@@ -101,9 +101,7 @@ func (m *ppModule) Init(ctx *module.Ctx) error {
 		}
 	})
 	ctx.HandleVerb("menu", func(a module.VerbArgs) error {
-		x, y := scale.Logical(a.XPixel, a.YPixel)
-		ctx.Go(func() { power.LaunchMenu(x, y) })
-		return nil
+		return menus.OpenList(ctx, menus.FromVerb(a), power.Menu(m.profile, m.setProfile))
 	})
 	return nil
 }

@@ -10,7 +10,7 @@ import (
 	_ "embed"
 
 	"github.com/nekorg/pawbar/internal/menus/session"
-	"github.com/nekorg/pawbar/internal/scale"
+	"github.com/nekorg/pawbar/pkg/menus"
 	"github.com/nekorg/pawbar/pkg/module"
 )
 
@@ -33,9 +33,7 @@ type scModule struct{}
 
 func (m *scModule) Init(ctx *module.Ctx) error {
 	ctx.HandleVerb("menu", func(a module.VerbArgs) error {
-		x, y := scale.Logical(a.XPixel, a.YPixel)
-		ctx.Go(func() { session.LaunchMenu(x, y) })
-		return nil
+		return menus.OpenList(ctx, menus.FromVerb(a), session.Menu())
 	})
 	return nil
 }

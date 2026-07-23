@@ -1,53 +1,15 @@
 package calendar
 
 import (
-	"github.com/nekorg/katnip"
-	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/internal/menus/calendar/tui"
+	"github.com/nekorg/pawbar/pkg/menus"
 )
 
-func LaunchMenu(x, y int) {
-	kn := CreatePanel(x, y, 21, 8)
-	kn.Wait()
+// Spec is the calendar menu: a custom-drawn month view.
+func Spec() menus.Spec {
+	return menus.Spec{Name: "calendar", Width: 21, Height: 8}
 }
 
 func init() {
-	katnip.RegisterFunc("calendar", tui.Panel)
-}
-
-func CreatePanel(x, y, w, h int) *katnip.Panel {
-	conf := katnip.Config{
-		Position: katnip.Vector{X: x, Y: y},
-		Size:     katnip.Vector{X: w, Y: h},
-		Edge:     katnip.EdgeNone,
-		Layer:    katnip.LayerTop,
-		// FocusPolicy: katnip.FocusNotAllowed,
-		FocusPolicy: katnip.FocusExclusive,
-		ConfigFile:  "NONE",
-		KittyOverrides: []string{
-			"font_size=12",
-			"cursor_trail=0",
-			"cursor_shape=beam",
-			"cursor=#000000",
-			"paste_actions=replace-dangerous-control-codes",
-			"map kitty_mod+equal       no_op",
-			"map kitty_mod+plus        no_op",
-			"map kitty_mod+kp_add      no_op",
-			"map cmd+plus              no_op",
-			"map cmd+equal             no_op",
-			"map shift+cmd+equal       no_op",
-			"map kitty_mod+minus       no_op",
-			"map kitty_mod+kp_subtract no_op",
-			"map cmd+minus             no_op",
-			"map shift+cmd+minus       no_op",
-			"map kitty_mod+backspace   no_op",
-			"map cmd+0                 no_op",
-		},
-	}
-
-	kn := katnip.NewPanel("calendar", conf)
-	logging.Log.Debug().Msgf("%s", kn.Cmd.String())
-	kn.Start()
-
-	return kn
+	menus.Register("calendar", tui.App)
 }
