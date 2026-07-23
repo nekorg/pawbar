@@ -3,7 +3,7 @@ package module
 import (
 	"testing"
 
-	"git.sr.ht/~rockorager/vaxis"
+	"go.rockorager.dev/vaxis"
 )
 
 func TestBlockOver(t *testing.T) {

@@ -9,10 +9,10 @@ package core
 import (
 	"sync"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/pkg/module"
 	"github.com/rs/zerolog"
+	"go.rockorager.dev/vaxis"
 )
 
 // Side indexes the three bar anchors.

@@ -6,7 +6,7 @@
 
 package module
 
-import "git.sr.ht/~rockorager/vaxis"
+import "go.rockorager.dev/vaxis"
 
 // Block is the style/format surface every module shares and the only part
 // of a module's configuration that named states can override. All fields

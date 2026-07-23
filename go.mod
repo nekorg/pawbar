@@ -2,10 +2,9 @@ module github.com/nekorg/pawbar
 
 go 1.25.6
 
-replace git.sr.ht/~rockorager/vaxis => ./vaxis
+replace go.rockorager.dev/vaxis => ./vaxis
 
 require (
-	git.sr.ht/~rockorager/vaxis v0.14.0
 	github.com/Wifx/gonetworkmanager/v3 v3.2.0
 	github.com/codelif/gorsvg v0.1.1
 	github.com/codelif/outputs v0.1.0
@@ -19,6 +18,7 @@ require (
 	github.com/nekorg/katnip v0.1.0
 	github.com/rs/zerolog v1.35.1
 	github.com/shirou/gopsutil/v3 v3.24.5
+	go.rockorager.dev/vaxis v0.14.0
 	golang.org/x/image v0.9.0
 	gopkg.in/yaml.v3 v3.0.1
 )

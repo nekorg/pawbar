@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/pkg/module"
 	"github.com/rs/zerolog"
+	"go.rockorager.dev/vaxis"
 )
 
 // testMod counts renders and exposes a channel source plus a verb.

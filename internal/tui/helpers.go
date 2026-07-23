@@ -7,8 +7,8 @@
 package tui
 
 import (
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/pkg/module"
+	"go.rockorager.dev/vaxis"
 )
 
 func anchorOf(s string) anchor {

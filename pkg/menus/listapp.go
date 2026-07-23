@@ -10,8 +10,8 @@ import (
 	"image/color"
 	"time"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/pkg/menus/wire"
+	"go.rockorager.dev/vaxis"
 )
 
 // hoverActivationTimeout is how long the pointer rests on a submenu
@@ -76,6 +76,16 @@ func listApp(s *Session) int {
 
 	r := newListRenderer(s.Window(), fg)
 
+	// submenuReq carries this panel's measured cell metrics so the bar
+	// places the submenu against real row positions, not estimates.
+	submenuReq := func(id int32, row int) wire.Msg {
+		m := wire.Msg{Type: wire.MsgSubmenuReq, ItemID: id, Row: row}
+		if px, py := s.MeasuredPPC(); px > 0 && py > 0 {
+			m.Geo = &wire.Geometry{PPCX: px, PPCY: py}
+		}
+		return m
+	}
+
 	hover := func() {
 		it := st.current()
 		if it == nil {
@@ -91,7 +101,7 @@ func listApp(s *Session) int {
 				id, row := it.ID, st.row
 				st.hoverTimer = time.AfterFunc(hoverActivationTimeout, func() {
 					if st.hoverItemID == id && st.row == row {
-						s.Send(wire.Msg{Type: wire.MsgSubmenuReq, ItemID: id, Row: row})
+						s.Send(submenuReq(id, row))
 					}
 				})
 			}
@@ -116,7 +126,7 @@ func listApp(s *Session) int {
 	requestSubmenu := func() {
 		if it := st.current(); it != nil && it.HasSubmenu && !it.Disabled {
 			st.cancelHoverTimer()
-			s.Send(wire.Msg{Type: wire.MsgSubmenuReq, ItemID: it.ID, Row: st.row})
+			s.Send(submenuReq(it.ID, st.row))
 		}
 	}
 

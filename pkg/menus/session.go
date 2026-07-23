@@ -13,11 +13,11 @@ import (
 	"os"
 	"sync"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/pkg/menus/wire"
+	"go.rockorager.dev/vaxis"
 )
 
 // AppFunc is the child-side entry point of a menu: it runs inside the
@@ -48,6 +48,32 @@ type Session struct {
 
 	geoMu sync.Mutex
 	geo   wire.Geometry
+
+	szMu             sync.Mutex
+	cols, rows       int
+	xPixels, yPixels int
+}
+
+func (s *Session) setSize(cols, rows, xPixels, yPixels int) {
+	if cols <= 0 || rows <= 0 || xPixels <= 0 || yPixels <= 0 {
+		return
+	}
+	s.szMu.Lock()
+	s.cols, s.rows = cols, rows
+	s.xPixels, s.yPixels = xPixels, yPixels
+	s.szMu.Unlock()
+}
+
+// MeasuredPPC returns the panel's own physical pixels-per-cell, as
+// reported by its terminal — the ground truth for pixel-exact
+// placement relative to this panel's rows. Zero when unknown.
+func (s *Session) MeasuredPPC() (float64, float64) {
+	s.szMu.Lock()
+	defer s.szMu.Unlock()
+	if s.cols <= 0 || s.rows <= 0 {
+		return 0, 0
+	}
+	return float64(s.xPixels) / float64(s.cols), float64(s.yPixels) / float64(s.rows)
 }
 
 // Vx exposes the underlying vaxis instance (graphics, color queries).
@@ -100,8 +126,8 @@ func (s *Session) setGeometry(g wire.Geometry) {
 func (s *Session) Resize(cols, rows int) {
 	geo := s.Geometry()
 	if geo.MonW > 0 && geo.Scale > 0 {
-		w := cellsToLogical(cols, geo.PPCX, geo.Scale)
-		h := cellsToLogical(rows, geo.PPCY, geo.Scale)
+		w := cellsToLogical(cols, geo.PPCX, geo.Scale) + 2*geo.Pad
+		h := cellsToLogical(rows, geo.PPCY, geo.Scale) + 2*geo.Pad
 		x := clamp(geo.PanelX, 0, geo.MonW-w)
 		y := clamp(geo.PanelY, 0, geo.MonH-h)
 		if x != geo.PanelX || y != geo.PanelY {
@@ -135,6 +161,10 @@ func runSession(k *katnip.Kitty, rw io.ReadWriter, app AppFunc) int {
 		events: make(chan vaxis.Event, 32),
 		msgs:   make(chan wire.Msg, 16),
 	}
+	{
+		ws := vx.Size()
+		s.setSize(ws.Cols, ws.Rows, ws.XPixel, ws.YPixel)
+	}
 
 	ctrl := make(chan wire.Msg, 16)
 	if rw != nil {
@@ -163,6 +193,8 @@ func runSession(k *katnip.Kitty, rw io.ReadWriter, app AppFunc) int {
 			select {
 			case ev := <-vx.Events():
 				switch ev := ev.(type) {
+				case vaxis.Resize:
+					s.setSize(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
 				case vaxis.Key:
 					if ev.EventType == vaxis.EventPress && ev.Keycode == vaxis.KeyEsc {
 						return

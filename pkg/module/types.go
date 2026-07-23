@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/internal/lookup/colors"
 	"github.com/nekorg/pawbar/internal/lookup/icons"
 	"github.com/nekorg/pawbar/internal/lookup/units"
+	"go.rockorager.dev/vaxis"
 	"gopkg.in/yaml.v3"
 )
 

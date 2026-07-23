@@ -9,7 +9,7 @@ package module
 import (
 	"fmt"
 
-	"git.sr.ht/~rockorager/vaxis"
+	"go.rockorager.dev/vaxis"
 )
 
 // Segment is one styled run of text a module rendered. Segments are the

@@ -18,9 +18,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/pkg/module"
+	"go.rockorager.dev/vaxis"
 )
 
 const (

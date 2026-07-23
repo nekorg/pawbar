@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/pawbar/pkg/menus"
+	"go.rockorager.dev/vaxis"
 )
 
 var (

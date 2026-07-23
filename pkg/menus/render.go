@@ -16,11 +16,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/codelif/gorsvg"
 	"github.com/codelif/xdgicons/missing"
 	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/pkg/menus/wire"
+	"go.rockorager.dev/vaxis"
 	"golang.org/x/image/colornames"
 )
 

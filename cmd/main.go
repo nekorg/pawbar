@@ -14,7 +14,6 @@ import (
 	"os"
 	"runtime/debug"
 
-	"git.sr.ht/~rockorager/vaxis"
 	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/internal/core"
@@ -23,6 +22,7 @@ import (
 	"github.com/nekorg/pawbar/internal/tui"
 	"github.com/nekorg/pawbar/pkg/menus"
 	"github.com/nekorg/pawbar/pkg/module"
+	"go.rockorager.dev/vaxis"
 )
 
 func init() {
