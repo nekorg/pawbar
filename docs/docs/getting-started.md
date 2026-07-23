@@ -16,7 +16,7 @@ The following dependencies are required at compile time:
 
 Clone and compile `pawbar`
 ```sh
-git clone --recurse-submodules https://github.com/codelif/pawbar
+git clone --recurse-submodules https://github.com/nekorg/pawbar
 cd pawbar
 go build .
 ```

@@ -75,11 +75,11 @@ export default defineConfig({
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/codelif/pawbar' }
+      { icon: 'github', link: 'https://github.com/nekorg/pawbar' }
     ],
 
     editLink: {
-      pattern: 'https://github.com/codelif/pawbar/edit/main/docs/:path',
+      pattern: 'https://github.com/nekorg/pawbar/edit/main/docs/:path',
       text: 'Edit this page on Github'
     },
 
