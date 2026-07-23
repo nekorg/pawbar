@@ -1,2 +1,172 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="716"
+   height="480"
+   viewBox="0 0 716 480"
+   version="1.1"
+   id="svg13"
+   sodipodi:docname="pawbar.svg"
+   inkscape:version="1.4.2 (ebf0e940d0, 2025-05-08)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs13" />
+  <sodipodi:namedview
+     id="namedview13"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="0.1796875"
+     inkscape:cx="208.69565"
+     inkscape:cy="-36.173913"
+     inkscape:window-width="1440"
+     inkscape:window-height="900"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg13" />
+  <circle
+     cx="359"
+     cy="260"
+     fill="#5b3a2e"
+     id="ellipse1"
+     r="220" />
+  <polygon
+     points="317,499 377,272 437,499 "
+     fill="#5b3a2e"
+     id="polygon1"
+     transform="translate(-153,-272)" />
+  <polygon
+     points="587,499 647,272 707,499 "
+     fill="#5b3a2e"
+     id="polygon2"
+     transform="translate(-153,-272)" />
+  <ellipse
+     cx="309"
+     cy="220"
+     rx="42"
+     ry="50"
+     fill="#cde000"
+     id="ellipse2" />
+  <ellipse
+     cx="409"
+     cy="220"
+     rx="42"
+     ry="50"
+     fill="#cde000"
+     id="ellipse3" />
+  <ellipse
+     cx="309"
+     cy="220"
+     rx="10"
+     ry="40"
+     fill="#2a2a2a"
+     id="ellipse4" />
+  <ellipse
+     cx="409"
+     cy="220"
+     rx="10"
+     ry="40"
+     fill="#2a2a2a"
+     id="ellipse5" />
+  <line
+     x1="287"
+     y1="230"
+     x2="113.42636"
+     y2="152.72003"
+     stroke="#2a2a2a"
+     stroke-width="6"
+     stroke-linecap="round"
+     id="line5" />
+  <line
+     x1="287"
+     y1="246"
+     x2="117.93127"
+     y2="228.23016"
+     stroke="#2a2a2a"
+     stroke-width="6"
+     stroke-linecap="round"
+     id="line6" />
+  <line
+     x1="287"
+     y1="262"
+     x2="141.45563"
+     y2="298.28827"
+     stroke="#2a2a2a"
+     stroke-width="6"
+     stroke-linecap="round"
+     id="line7" />
+  <line
+     x1="431"
+     y1="230"
+     x2="604.57361"
+     y2="152.72003"
+     stroke="#2a2a2a"
+     stroke-width="6"
+     stroke-linecap="round"
+     id="line8" />
+  <line
+     x1="431"
+     y1="242"
+     x2="600.06873"
+     y2="224.23016"
+     stroke="#2a2a2a"
+     stroke-width="6"
+     stroke-linecap="round"
+     id="line9" />
+  <line
+     x1="431"
+     y1="258"
+     x2="577.72217"
+     y2="289.18677"
+     stroke="#2a2a2a"
+     stroke-width="6"
+     stroke-linecap="round"
+     id="line10" />
+  <rect
+     x="0"
+     y="260"
+     width="716"
+     height="120"
+     rx="28"
+     fill="#0e0f12"
+     id="rect10" />
+  <circle
+     cx="249"
+     cy="260"
+     r="58"
+     fill="#3b2c28"
+     id="circle10" />
+  <circle
+     cx="469"
+     cy="260"
+     r="58"
+     fill="#3b2c28"
+     id="circle11" />
+  <circle
+     cx="40"
+     cy="320"
+     r="8"
+     fill="#ffffff"
+     id="circle12" />
+  <rect
+     x="328"
+     y="316"
+     width="60"
+     height="8"
+     rx="4"
+     fill="#ffffff"
+     id="rect12" />
+  <circle
+     cx="676"
+     cy="320"
+     r="8"
+     fill="#ffffff"
+     id="circle13" />
+</svg>
