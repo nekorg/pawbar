@@ -120,24 +120,56 @@ func (s *Session) setGeometry(g wire.Geometry) {
 	s.geoMu.Unlock()
 }
 
+// reclampPos computes an on-screen-clamped position for a cols x rows
+// panel using this panel's own measured cell metrics — the ground truth
+// for the surface actually on screen, which the bar's initial estimate
+// (made with the bar's font, not the panel's pinned one) can miss. It
+// reports whether the result differs from the current placement.
+func (s *Session) reclampPos(cols, rows int) (int, int, wire.Geometry, bool) {
+	geo := s.Geometry()
+	if geo.MonW <= 0 || geo.Scale <= 0 {
+		return geo.PanelX, geo.PanelY, geo, false
+	}
+	ppcX, ppcY := geo.PPCX, geo.PPCY
+	if mx, my := s.MeasuredPPC(); mx > 0 && my > 0 {
+		ppcX, ppcY = mx, my
+	}
+	w := cellsToLogical(cols, ppcX, geo.Scale) + 2*geo.Pad
+	h := cellsToLogical(rows, ppcY, geo.Scale) + 2*geo.Pad
+	x := clamp(geo.PanelX, 0, geo.MonW-w)
+	y := clamp(geo.PanelY, 0, geo.MonH-h)
+	return x, y, geo, x != geo.PanelX || y != geo.PanelY
+}
+
+func (s *Session) applyMove(x, y int, geo wire.Geometry, cols, rows int) {
+	s.k.Move(x, y)
+	geo.PanelX, geo.PanelY = x, y
+	s.setGeometry(geo)
+	s.Send(wire.Msg{Type: wire.MsgResized, Cols: cols, Rows: rows, Geo: &geo})
+}
+
 // Resize grows or shrinks the panel to cols x rows, moving it first if
 // the new size would clip off the monitor. It reports the resulting
 // placement back to the bar so submenu math stays accurate.
 func (s *Session) Resize(cols, rows int) {
-	geo := s.Geometry()
-	if geo.MonW > 0 && geo.Scale > 0 {
-		w := cellsToLogical(cols, geo.PPCX, geo.Scale) + 2*geo.Pad
-		h := cellsToLogical(rows, geo.PPCY, geo.Scale) + 2*geo.Pad
-		x := clamp(geo.PanelX, 0, geo.MonW-w)
-		y := clamp(geo.PanelY, 0, geo.MonH-h)
-		if x != geo.PanelX || y != geo.PanelY {
-			s.k.Move(x, y)
-			geo.PanelX, geo.PanelY = x, y
-			s.setGeometry(geo)
-		}
+	x, y, geo, moved := s.reclampPos(cols, rows)
+	if moved {
+		s.k.Move(x, y)
+		geo.PanelX, geo.PanelY = x, y
+		s.setGeometry(geo)
 	}
 	s.k.Resize(cols, rows)
 	s.Send(wire.Msg{Type: wire.MsgResized, Cols: cols, Rows: rows, Geo: &geo})
+}
+
+// Reposition re-clamps the panel to the monitor without resizing it. The
+// root menu is spawned at its final cell size, so Resize never fires to
+// correct an initial placement made with the bar's (possibly mismatched)
+// cell metrics; the child calls this once it knows its true size.
+func (s *Session) Reposition(cols, rows int) {
+	if x, y, geo, moved := s.reclampPos(cols, rows); moved {
+		s.applyMove(x, y, geo, cols, rows)
+	}
 }
 
 // runSession owns the per-menu boilerplate every menu used to

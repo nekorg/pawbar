@@ -225,6 +225,11 @@ func listApp(s *Session) int {
 			cols, rows := r.win.Size()
 			if cols != w || rows != h {
 				s.Resize(w, h)
+			} else {
+				// Already the right size (root spawns at its final size),
+				// but the bar's initial placement may overflow with a
+				// different font; re-clamp against our own metrics.
+				s.Reposition(cols, rows)
 			}
 		}
 	}

@@ -33,6 +33,10 @@ var kittyOverrides = []string{
 	"map kitty_mod+backspace   no_op",
 	"map cmd+0                 no_op",
 	"draw_minimal_borders=yes",
+	// Pin padding to zero so a panel's on-screen footprint is exactly
+	// its cells; clamping then only has to account for panelPad, not
+	// unknown chrome.
+	"window_padding_width=0",
 }
 
 // spawnPanel creates and starts a menu panel at a logical position with a
