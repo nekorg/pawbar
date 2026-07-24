@@ -307,10 +307,12 @@ Shipped defaults:
 ```yaml
 format: "󰫔"
 states:
-  playing: { format: " {artists}  {title}" }
-  paused: { format: " {artists}  {title}" }
+  playing: { format: " {title:.40s} • {artists:.20s}" }
+  paused: { format: " {title:.40s} • {artists:.20s}" }
+cursor: pointer
 on:
   left: play-pause
+  right: raise
 ```
 
 No options.
@@ -330,6 +332,7 @@ The base format (idle icon) shows when no player is active.
 | Verb | Effect |
 |---|---|
 | `play-pause` | toggle playback on the active player (shipped: `left`) |
+| `raise` | bring the active player's UI to the front (shipped: `right`) |
 
 ## `powerprofiles`
 

@@ -39,6 +39,7 @@ func init() {
 		},
 		Verbs: []module.VerbDef{
 			{Name: "play-pause", Doc: "toggle playback on the active player"},
+			{Name: "raise", Doc: "bring the active player's user interface to the front"},
 		},
 		Defaults: defaults,
 	})
@@ -86,20 +87,48 @@ func (m *mprisModule) Init(ctx *module.Ctx) error {
 	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) { m.handleSignal(ctx, sig) })
 
 	ctx.HandleVerb("play-pause", func(module.VerbArgs) error {
-		player := m.player
-		if player == "" {
-			var err error
-			if player, err = m.activePlayer(); err != nil {
-				return err
-			}
+		obj, player, err := m.resolvePlayer()
+		if err != nil {
+			return err
 		}
-		obj := m.conn.Object(player, mprisPath)
 		if call := obj.Call(playerIface+".PlayPause", 0); call.Err != nil {
 			return fmt.Errorf("PlayPause on %s: %w", player, call.Err)
 		}
 		return nil
 	})
+
+	ctx.HandleVerb("raise", func(module.VerbArgs) error {
+		obj, player, err := m.resolvePlayer()
+		if err != nil {
+			return err
+		}
+		variant, err := obj.GetProperty(playerIface + ".CanRaise")
+		if err != nil {
+			return fmt.Errorf("CanRaise on %s: %w", player, err)
+		}
+		if canRaise, _ := variant.Value().(bool); !canRaise {
+			ctx.Log("raise: %s cannot be raised (CanRaise=false)", player)
+			return nil
+		}
+		if call := obj.Call(playerIface+".Raise", 0); call.Err != nil {
+			return fmt.Errorf("Raise on %s: %w", player, call.Err)
+		}
+		return nil
+	})
 	return nil
+}
+
+// resolvePlayer returns the D-Bus object and bus name a verb should act
+// on: the tracked player, or the active one when none is tracked yet.
+func (m *mprisModule) resolvePlayer() (dbus.BusObject, string, error) {
+	player := m.player
+	if player == "" {
+		var err error
+		if player, err = m.activePlayer(); err != nil {
+			return nil, "", err
+		}
+	}
+	return m.conn.Object(player, mprisPath), player, nil
 }
 
 func (m *mprisModule) Stop(ctx *module.Ctx) {

@@ -1,6 +1,8 @@
 format: "󰫔"
 states:
-  playing: { format: " {artists}  {title}" }
-  paused: { format: " {artists}  {title}" }
+  playing: { format: " {title:.40s} • {artists:.20s}" }
+  paused: { format: " {title:.40s} • {artists:.20s}" }
+cursor: pointer
 on:
   left: play-pause
+  right: raise
