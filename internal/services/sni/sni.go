@@ -8,6 +8,7 @@ package sni
 
 import (
 	"fmt"
+	"image"
 	"os"
 	"sort"
 	"strings"
@@ -65,6 +66,10 @@ type Item struct {
 	Attention    string
 	MenuPath     dbus.ObjectPath
 	IconThemeDir string
+	// IconPixmap is the item's best embedded icon frame, decoded from the
+	// SNI IconPixmap property. It is a fallback for items that ship no
+	// themed IconName (e.g. many Electron apps). Nil when absent.
+	IconPixmap image.Image
 }
 
 type Service struct {
@@ -967,12 +972,59 @@ func (s *Service) refreshItem(it *Item) {
 	grab("AttentionIconName", &it.Attention)
 	grab("IconThemePath", &it.IconThemeDir)
 
+	var pmv dbus.Variant
+	if err := obj.Call("org.freedesktop.DBus.Properties.Get", 0, ifaceItem, "IconPixmap").Store(&pmv); err == nil {
+		if img := decodePixmap(pmv); img != nil {
+			it.IconPixmap = img
+		}
+	}
+
 	var catv dbus.Variant
 	if err := obj.Call("org.freedesktop.DBus.Properties.Get", 0, ifaceItem, "Category").Store(&catv); err == nil {
 		if c, ok := catv.Value().(string); ok {
 			it.Category = Category(c)
 		}
 	}
+}
+
+// decodePixmap parses the SNI IconPixmap property (signature a(iiay): an
+// array of width/height/ARGB32-big-endian frames) and returns the largest
+// frame as an image. Returns nil when no usable frame is present.
+func decodePixmap(v dbus.Variant) image.Image {
+	frames, ok := v.Value().([][]any)
+	if !ok {
+		return nil
+	}
+	var bw, bh int
+	var best []byte
+	for _, f := range frames {
+		if len(f) != 3 {
+			continue
+		}
+		w, _ := f[0].(int32)
+		h, _ := f[1].(int32)
+		data, _ := f[2].([]byte)
+		if w <= 0 || h <= 0 || len(data) < int(w)*int(h)*4 {
+			continue
+		}
+		if int(w)*int(h) > bw*bh {
+			bw, bh, best = int(w), int(h), data
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	// SNI pixmaps are ARGB32 in network byte order; NRGBA is
+	// non-premultiplied like the wire data, so channels map straight over.
+	img := image.NewNRGBA(image.Rect(0, 0, bw, bh))
+	n := bw * bh * 4
+	for i := 0; i+3 < n && i+3 < len(best); i += 4 {
+		img.Pix[i] = best[i+1]   // R
+		img.Pix[i+1] = best[i+2] // G
+		img.Pix[i+2] = best[i+3] // B
+		img.Pix[i+3] = best[i]   // A
+	}
+	return img
 }
 
 func (s *Service) watchItemProps(it *Item, done <-chan struct{}) {
@@ -1155,6 +1207,10 @@ func (s *Service) applyChanges(it *Item, changed map[string]dbus.Variant) {
 		case "IconThemePath":
 			if str, ok := v.Value().(string); ok {
 				it.IconThemeDir = str
+			}
+		case "IconPixmap":
+			if img := decodePixmap(v); img != nil {
+				it.IconPixmap = img
 			}
 		case "Menu":
 			if p, ok := v.Value().(dbus.ObjectPath); ok {

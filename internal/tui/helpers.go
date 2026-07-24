@@ -43,8 +43,28 @@ func flatten(side int) []cell {
 		spacer := idx < len(spacers[side]) && spacers[side][idx]
 		for _, seg := range segs {
 			hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
+			if seg.Image != nil && seg.Cells > 0 {
+				out = append(out, imageCells(seg, hit, spacer)...)
+				continue
+			}
 			out = append(out, textToCells(seg.Text, seg.Style, hit, true, spacer)...)
 		}
+	}
+	return out
+}
+
+// imageCells reserves seg.Cells blank columns for an icon segment, tagging
+// the first with the image so the renderer draws it spanning those columns.
+// The reserved cells share one Hit so clicks route to the segment's region.
+func imageCells(seg module.Segment, hit Hit, spacer bool) []cell {
+	out := make([]cell, 0, seg.Cells)
+	blank := vaxis.Cell{Character: vaxis.Characters(" ")[0], Style: seg.Style}
+	for i := 0; i < seg.Cells; i++ {
+		c := cell{c: blank, hit: hit, hasMod: true, isSpacer: spacer}
+		if i == 0 {
+			c.img = &imgCell{img: seg.Image, key: seg.ImageKey, span: seg.Cells}
+		}
+		out = append(out, c)
 	}
 	return out
 }
@@ -68,6 +88,10 @@ func textToCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []ce
 func SegmentsWidth(segs []module.Segment) int {
 	w := 0
 	for _, seg := range segs {
+		if seg.Image != nil && seg.Cells > 0 {
+			w += seg.Cells
+			continue
+		}
 		for _, ch := range vaxis.Characters(seg.Text) {
 			w += ch.Width
 		}

@@ -8,6 +8,7 @@ package module
 
 import (
 	"fmt"
+	"image"
 
 	"go.rockorager.dev/vaxis"
 )
@@ -20,6 +21,16 @@ type Segment struct {
 	Style  vaxis.Style
 	Region string
 	Shape  vaxis.MouseShape
+
+	// Image, when non-nil, makes this an icon segment: the runtime draws it
+	// as a Kitty graphic spanning Cells columns instead of drawing Text.
+	// ImageKey identifies the image for caching across frames — it must be
+	// fully determined by the image's content, and callers must reuse the
+	// same image value for an unchanged key so equal snapshots compare
+	// equal (the runtime skips re-publishing unchanged output).
+	Image    image.Image
+	ImageKey string
+	Cells    int
 }
 
 // Resolved is the outcome of resolving the style cascade for a set of
@@ -94,6 +105,32 @@ func (w *Writer) Text(data P, opts ...SegOpt) {
 func (w *Writer) Raw(s string, opts ...SegOpt) {
 	o := applyOpts(opts)
 	w.emit(s, o, w.resolve(o.states))
+}
+
+// Icon emits an image segment: the runtime draws img as a Kitty graphic
+// spanning cells columns, still routing clicks through Region. key
+// identifies the image for cross-frame caching and must be fully
+// determined by the image's content (re-decoding is the caller's concern;
+// it should hand back the same image value for an unchanged key). No-ops
+// when img is nil or cells <= 0.
+func (w *Writer) Icon(img image.Image, key string, cells int, opts ...SegOpt) {
+	if img == nil || cells <= 0 {
+		return
+	}
+	o := applyOpts(opts)
+	r := w.resolve(o.states)
+	shape := r.Shape
+	if o.cursor != nil {
+		shape = o.cursor.Go()
+	}
+	w.segs = append(w.segs, Segment{
+		Style:    r.Style,
+		Region:   o.region,
+		Shape:    shape,
+		Image:    img,
+		ImageKey: key,
+		Cells:    cells,
+	})
 }
 
 // Segments returns everything written. Runtime use.

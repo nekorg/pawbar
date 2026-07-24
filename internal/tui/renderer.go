@@ -10,6 +10,9 @@
 package tui
 
 import (
+	"fmt"
+	"image"
+
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/pkg/module"
 	"go.rockorager.dev/vaxis"
@@ -23,13 +26,35 @@ type Hit struct {
 	Shape  vaxis.MouseShape
 }
 
-// cell is one laid-out grapheme plus its hit metadata.
+// imgCell marks the first reserved column of an icon segment: the runtime
+// draws img as a Kitty graphic spanning span columns from this cell.
+type imgCell struct {
+	img  image.Image
+	key  string
+	span int
+}
+
+// cell is one laid-out grapheme plus its hit metadata. img is set only on
+// the head column of an icon segment.
 type cell struct {
 	c        vaxis.Cell
 	hit      Hit
 	hasMod   bool
 	isSpacer bool
+	img      *imgCell
 }
+
+// iconInset leaves a pixel of breathing room around a drawn tray icon.
+const iconInset = 1
+
+// iconCache holds encoded Kitty graphics keyed by ImageKey. Encoding is
+// async and Draw must place the same image every frame, so images are
+// created once and reused; iconSeen tracks which survived the current frame
+// so vanished ones can be freed.
+var (
+	iconCache = map[string]*vaxis.KittyImage{}
+	iconSeen  = map[string]bool{}
+)
 
 var (
 	width, height int
@@ -125,6 +150,7 @@ func Render(win vaxis.Window) {
 		state[i] = cell{c: vaxis.Cell{Character: vaxis.Characters(" ")[0]}}
 	}
 	win.Clear()
+	clear(iconSeen)
 
 	blocks := buildBlocks()
 	occ := make([]bool, width)
@@ -236,6 +262,8 @@ func Render(win vaxis.Window) {
 			drawCells(win, visible, width-totalWidth(visible), mark)
 		}
 	}
+
+	pruneIcons()
 }
 
 func drawCells(win vaxis.Window, cells []cell, x int, mark func(int, int)) {
@@ -243,8 +271,70 @@ func drawCells(win vaxis.Window, cells []cell, x int, mark func(int, int)) {
 		return
 	}
 	for _, r := range cells {
+		start := x
 		next := writeCell(win, x, r)
 		mark(x, next-x)
+		// Draw the icon over its reserved span only when it fits whole;
+		// a partially trimmed icon is dropped rather than clipped.
+		if r.img != nil && start+r.img.span <= width {
+			drawIcon(win, start, r.img)
+		}
 		x = next
+	}
+}
+
+// drawIcon places an icon segment's Kitty graphic over span columns from
+// col, scaled to one row and centered pixel-precisely (mirrors the menu
+// gutter-icon renderer). Images are cached by key + cell size across
+// frames.
+func drawIcon(win vaxis.Window, col int, ic *imgCell) {
+	var cellW, cellH int
+	if size := win.Vx.Size(); size.Cols > 0 && size.Rows > 0 {
+		cellW = size.XPixel / size.Cols
+		cellH = size.YPixel / size.Rows
+	}
+
+	// Cell size is part of the key: a DPI/font change re-scales the icon
+	// rather than reusing a bitmap sized for the old cell.
+	cacheKey := fmt.Sprintf("%s@%dx%d", ic.key, cellW, cellH)
+	iconSeen[cacheKey] = true
+
+	kimg, cached := iconCache[cacheKey]
+	if !cached {
+		kimg = win.Vx.NewKittyGraphic(ic.img)
+		iconCache[cacheKey] = kimg
+		if cellW > 0 && cellH > 0 {
+			// vaxis resamples with a high-quality filter, so this yields a
+			// crisp icon fitted to the gutter box.
+			kimg.ResizePixels(ic.span*cellW-2*iconInset, cellH-2*iconInset)
+		} else {
+			kimg.Resize(ic.span, 1)
+		}
+	}
+
+	if cellW <= 0 || cellH <= 0 {
+		kimg.Draw(win.New(col, 0, ic.span, 1))
+		return
+	}
+
+	// Center within the span: the absolute offset splits into an anchor
+	// cell plus an intra-cell rest, since kitty's X placement key must
+	// stay below one cell.
+	spanW := ic.span * cellW
+	pw, ph := kimg.PixelSize()
+	ox := max(0, (spanW-pw)/2)
+	yOff := max(0, (cellH-ph)/2)
+	kimg.SetOffset(ox%cellW, yOff)
+	kimg.Draw(win.New(col+ox/cellW, 0, ic.span-ox/cellW, 1))
+}
+
+// pruneIcons frees Kitty graphics whose segments were not drawn this frame
+// (e.g. a tray item disappeared), so terminal image memory doesn't grow.
+func pruneIcons() {
+	for key, kimg := range iconCache {
+		if !iconSeen[key] {
+			kimg.Destroy()
+			delete(iconCache, key)
+		}
 	}
 }

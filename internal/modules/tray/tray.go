@@ -8,6 +8,8 @@ package tray
 
 import (
 	_ "embed"
+	"image"
+	"image/color"
 	"strconv"
 
 	"github.com/nekorg/pawbar/internal/services"
@@ -34,7 +36,13 @@ func init() {
 type trayModule struct {
 	svc     *sni.Service
 	release func()
+	ctx     *module.Ctx
 	items   []sni.Item
+	// icons caches decoded images by content key across renders, so Render
+	// neither re-decodes nor hands the runtime a fresh pointer for an
+	// unchanged icon (which would defeat snapshot de-duplication). A cached
+	// nil marks an icon that failed to decode, so it falls back to text.
+	icons map[string]image.Image
 }
 
 func (m *trayModule) Init(ctx *module.Ctx) error {
@@ -49,6 +57,8 @@ func (m *trayModule) Init(ctx *module.Ctx) error {
 		return err
 	}
 	m.svc, m.release = svc, release
+	m.ctx = ctx
+	m.icons = make(map[string]image.Image)
 
 	m.items = svc.Items()
 	module.On(ctx, module.Chan(svc.IssueListener()), func(sni.Event) {
@@ -101,12 +111,45 @@ func (m *trayModule) OnMouse(ctx *module.Ctx, ev module.Mouse) {
 }
 
 func (m *trayModule) Render(w *module.Writer) {
+	fg := iconColor(m.ctx)
+	live := make(map[string]struct{}, len(m.items))
 	for i, it := range m.items {
 		if i != 0 {
 			w.Raw(" ")
 		}
-		w.Raw(labelFor(it), module.Region(strconv.Itoa(i)))
+		region := module.Region(strconv.Itoa(i))
+		img, key := m.icon(it, fg)
+		if key != "" {
+			live[key] = struct{}{}
+		}
+		if img != nil {
+			w.Icon(img, key, iconCells, region)
+		} else {
+			w.Raw(labelFor(it), region)
+		}
 	}
+	// Drop decoded icons no longer referenced by any current item.
+	for key := range m.icons {
+		if _, ok := live[key]; !ok {
+			delete(m.icons, key)
+		}
+	}
+}
+
+// icon returns the decoded image and cache key for an item, decoding on a
+// cache miss. A cached nil (decode failed / no icon) returns nil so the
+// caller falls back to a text label.
+func (m *trayModule) icon(it sni.Item, fg color.Color) (image.Image, string) {
+	key := iconKey(it, fg)
+	if key == "" {
+		return nil, ""
+	}
+	if img, ok := m.icons[key]; ok {
+		return img, key
+	}
+	img := decodeIcon(it, fg)
+	m.icons[key] = img
+	return img, key
 }
 
 func labelFor(it sni.Item) string {
