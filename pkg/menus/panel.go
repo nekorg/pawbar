@@ -8,7 +8,6 @@ package menus
 
 import (
 	"github.com/nekorg/katnip"
-	"github.com/nekorg/pawbar/internal/logging"
 )
 
 // kittyOverrides is the one copy of the kitty tuning every menu panel
@@ -39,19 +38,45 @@ var kittyOverrides = []string{
 	"window_padding_width=0",
 }
 
-// spawnPanel creates and starts a menu panel at a logical position with a
-// size in cells. x/y must already be clamped.
-func spawnPanel(name string, x, y, wCells, hCells int) (*katnip.Panel, error) {
-	kn := katnip.NewPanel(name, katnip.Config{
-		Position:       katnip.Vector{X: x, Y: y},
-		Size:           katnip.Vector{X: wCells, Y: hCells},
+const (
+	// warmCols/warmRows are the spare's placeholder size. The host waits
+	// for the panel to settle at exactly this size before announcing
+	// readiness: a freshly mapped panel first reports a wrong-scale
+	// transient, then settles to its configured size at the output's real
+	// scale — rendering before that would lay out at the wrong metrics.
+	warmCols = 20
+	warmRows = 5
+	// offScreenMargin parks a warm spare this many logical units past the
+	// output's right edge, where the compositor maps it invisibly. The menu
+	// is brought on-screen by a later Move (the reveal).
+	offScreenMargin = 2000
+)
+
+// spawnHostPanel starts a warm menu-host panel: hidden, pinned to the
+// primary output (so its cell scale matches the eventual on-screen scale
+// even while parked off it), parked past that output's right edge, with a
+// non-grabbing focus policy so an idle spare never steals the keyboard.
+// The host maps itself off-screen (paying the map round-trip while idle)
+// and switches to exclusive focus only when a menu reveals it. Size is a
+// placeholder — the host resizes to the real menu on open.
+func spawnHostPanel() (*katnip.Panel, error) {
+	cfg := katnip.Config{
+		Position:       katnip.Vector{X: 100000, Y: 0}, // fallback park when the output is unknown
+		Size:           katnip.Vector{X: warmCols, Y: warmRows},
 		Edge:           katnip.EdgeNone,
 		Layer:          katnip.LayerTop,
-		FocusPolicy:    katnip.FocusExclusive,
+		FocusPolicy:    katnip.FocusNotAllowed,
 		ConfigFile:     "NONE",
+		StartAsHidden:  true,
 		KittyOverrides: kittyOverrides,
-	})
-	logging.Log.Debug().Msgf("menus: spawning %q at (%d,%d) %dx%d cells", name, x, y, wCells, hCells)
+	}
+	if mon, ok := monitor(); ok {
+		cfg.OutputName = mon.Name
+		if mon.ScaledWidth > 0 {
+			cfg.Position.X = mon.ScaledWidth + offScreenMargin
+		}
+	}
+	kn := katnip.NewPanel(hostInstance, cfg)
 	if err := kn.Start(); err != nil {
 		return nil, err
 	}

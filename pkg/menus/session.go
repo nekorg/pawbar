@@ -8,10 +8,13 @@ package menus
 
 import (
 	"errors"
+	"fmt"
+	"image/color"
 	"io"
 	l "log"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/nekorg/katnip"
@@ -20,18 +23,47 @@ import (
 	"go.rockorager.dev/vaxis"
 )
 
+// hostInstance is the single katnip re-exec identity every menu panel runs
+// as. The concrete renderer is chosen per-open from the MsgOpen Kind, not
+// from the process identity, so one warm panel can serve any menu.
+const hostInstance = "pawpanel"
+
+const (
+	// mapWait bounds the wait for the off-screen map to report its size.
+	mapWait = 2 * time.Second
+	// resizeWait bounds the wait for a resize to a target size to land.
+	resizeWait = 2 * time.Second
+)
+
 // AppFunc is the child-side entry point of a menu: it runs inside the
 // menu's kitty process with the boilerplate (vaxis, wire decoding,
 // Esc/close handling, focus reporting) already wired up. It should
 // consume s.Events() until the channel closes, then return.
 type AppFunc func(s *Session) int
 
-// Register wires a menu app into katnip's re-exec dispatch. Call it
-// from an init() of a package linked into the binary.
+// appRegistry maps a menu Kind to its renderer. Populated by Register from
+// package init()s; read by the host after it receives MsgOpen (well after
+// all init()s, so cross-package registration order does not matter).
+var appRegistry = map[string]AppFunc{}
+
+// Register wires a menu renderer under a Kind. Call it from an init() of a
+// package linked into the binary. The Kind travels in MsgOpen; it is no
+// longer a katnip identity.
 func Register(name string, app AppFunc) {
-	katnip.RegisterFunc(name, func(k *katnip.Kitty, rw io.ReadWriter) int {
-		logging.SetupFileOnly(name)
-		return runSession(k, rw, app)
+	appRegistry[name] = app
+}
+
+func appLookup(kind string) AppFunc { return appRegistry[kind] }
+
+// RegisterHost wires the single generic menu-host identity into katnip's
+// re-exec dispatch. Call it once, from the top-level command's init AFTER
+// every Register call, so appRegistry is fully populated before a
+// re-exec'd host dispatches on Kind (a matching katnip identity runs its
+// handler during init and never returns, halting later init()s).
+func RegisterHost() {
+	katnip.RegisterFunc(hostInstance, func(k *katnip.Kitty, rw io.ReadWriter) int {
+		logging.SetupFileOnly(hostInstance)
+		return runHost(k, rw)
 	})
 }
 
@@ -40,11 +72,16 @@ func Register(name string, app AppFunc) {
 type Session struct {
 	vx    *vaxis.Vaxis
 	k     *katnip.Kitty
+	fg    color.RGBA
 	enc   *cbor.Encoder
 	encMu sync.Mutex
 
 	events chan vaxis.Event
 	msgs   chan wire.Msg
+
+	// revealed guards the one-time on-screen reveal (Move) on first paint.
+	// Touched only by the app goroutine (the sole caller of Render).
+	revealed bool
 
 	geoMu sync.Mutex
 	geo   wire.Geometry
@@ -82,8 +119,50 @@ func (s *Session) Vx() *vaxis.Vaxis { return s.vx }
 // Window returns the drawing surface.
 func (s *Session) Window() vaxis.Window { return s.vx.Window() }
 
-// Render flushes the current frame.
-func (s *Session) Render() { s.vx.Render() }
+// Foreground is the terminal's default foreground color, queried once
+// during warm-up so apps don't pay the OSC round-trip on the open path.
+func (s *Session) Foreground() color.RGBA { return s.fg }
+
+// Render flushes the current frame. The first call also reveals the
+// panel: it was rendered off-screen at its target size, so a single
+// panel-reconfigure slides it on-screen already sized and painted (no
+// blank flash) and grants it keyboard focus.
+func (s *Session) Render() {
+	s.vx.Render()
+	if !s.revealed {
+		s.revealed = true
+		// Reveal at the bar's clamped position. The bar computed it with
+		// correct on-screen cell metrics; the spare measured itself while
+		// parked off-screen (a different/absent output scale), so its own
+		// metrics must not re-clamp the placement here. The true on-screen
+		// metrics are recorded by hostLoop from the resize this move
+		// triggers, in time for submenu placement.
+		geo := s.Geometry()
+		s.reveal(geo.PanelX, geo.PanelY)
+	}
+}
+
+// reveal slides the panel on-screen to (x,y) and switches it to exclusive
+// keyboard focus in one panel-reconfigure. Spares idle off-screen with a
+// non-grabbing focus policy (so they never steal the user's keyboard);
+// revealing grants focus, so a warmed menu behaves exactly like one
+// spawned exclusive. Uses kitty's resize-os-window os-panel action
+// directly (katnip exposes no focus-policy helper yet).
+func (s *Session) reveal(x, y int) {
+	err := s.k.Dispatch("resize-os-window", map[string]any{
+		"action":      "os-panel",
+		"incremental": true,
+		"os_panel": []string{
+			fmt.Sprintf("margin-left=%d", x),
+			fmt.Sprintf("margin-top=%d", y),
+			"focus-policy=exclusive",
+		},
+	})
+	if err != nil {
+		logging.Log.Warn().Msgf("menus: reveal failed: %v", err)
+		s.k.Move(x, y) // fall back to at least moving on-screen
+	}
+}
 
 // Events streams input and screen events. The channel closes when the
 // menu must exit (Esc, a close message from the bar); return from the
@@ -172,10 +251,11 @@ func (s *Session) Reposition(cols, rows int) {
 	}
 }
 
-// runSession owns the per-menu boilerplate every menu used to
-// hand-roll: vaxis setup, wire decoding, Esc-to-close, focus
-// reporting, and close-on-command.
-func runSession(k *katnip.Kitty, rw io.ReadWriter, app AppFunc) int {
+// runHost is the generic menu host: one long-lived process that warms up
+// (mapped off-screen), waits to be assigned a menu, sizes itself to the
+// target, then runs the chosen renderer. The expensive kitty spawn,
+// vaxis handshake and foreground query are all paid before MsgOpen.
+func runHost(k *katnip.Kitty, rw io.ReadWriter) int {
 	l.SetOutput(io.Discard)
 
 	vx, err := vaxis.New(vaxis.Options{
@@ -187,20 +267,12 @@ func runSession(k *katnip.Kitty, rw io.ReadWriter, app AppFunc) int {
 	}
 	defer vx.Close()
 
-	s := &Session{
-		vx:     vx,
-		k:      k,
-		events: make(chan vaxis.Event, 32),
-		msgs:   make(chan wire.Msg, 16),
-	}
-	{
-		ws := vx.Size()
-		s.setSize(ws.Cols, ws.Rows, ws.XPixel, ws.YPixel)
-	}
+	fg := queryForeground(vx)
 
+	var enc *cbor.Encoder
 	ctrl := make(chan wire.Msg, 16)
 	if rw != nil {
-		s.enc = cbor.NewEncoder(rw)
+		enc = cbor.NewEncoder(rw)
 		go func() {
 			defer close(ctrl)
 			dec := cbor.NewDecoder(rw)
@@ -214,57 +286,177 @@ func runSession(k *katnip.Kitty, rw io.ReadWriter, app AppFunc) int {
 		}()
 	}
 
+	// WARM: map off-screen so the map round-trip is paid before any menu
+	// opens, then wait for the panel to SETTLE at its spawn size. A freshly
+	// mapped panel first reports a transient default at the wrong output
+	// scale and only then settles to its configured size at the real scale;
+	// announcing readiness before the settle would let a menu render at the
+	// wrong metrics (wrong column count -> wrapped rows on reveal).
 	k.Show()
+	if r, ok := awaitResize(vx, warmCols, warmRows, mapWait); ok {
+		vx.Resize(r) // apply to vaxis so Size()/buffers track the real size
+	}
+	if enc != nil {
+		_ = enc.Encode(wire.Msg{Type: wire.MsgReady})
+	}
 
-	// The host loop is the only sender on s.events and the only party
-	// that closes it; the app exits by draining the closed channel.
-	go func() {
-		defer close(s.events)
-		focused := false
-		for {
-			select {
-			case ev := <-vx.Events():
-				switch ev := ev.(type) {
-				case vaxis.Resize:
-					s.setSize(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
-				case vaxis.Key:
-					if ev.EventType == vaxis.EventPress && ev.Keycode == vaxis.KeyEsc {
-						return
-					}
-				case vaxis.FocusIn:
-					focused = true
-					s.Send(wire.Msg{Type: wire.MsgFocusGained})
-					continue
-				case vaxis.FocusOut:
-					// Only report after a real focus: compositors can
-					// emit a spurious FocusOut at map time, which would
-					// otherwise close the menu as it opens.
-					if focused {
-						s.Send(wire.Msg{Type: wire.MsgFocusLost})
-					}
-					continue
-				case vaxis.QuitEvent:
-					return
-				}
-				s.events <- ev
-			case m, ok := <-ctrl:
-				if !ok {
-					// Wire gone: the bar died or tore the stream down.
-					return
-				}
-				if m.Type == wire.MsgClose {
-					return
-				}
-				if m.Geo != nil {
-					s.setGeometry(*m.Geo)
-				}
-				select {
-				case s.msgs <- m:
-				default:
-				}
+	// Idle until the bar assigns this spare a menu. Drain vaxis events so a
+	// long-idle spare never wedges vaxis on a full event buffer.
+	open, ok := waitOpen(vx, ctrl)
+	if !ok {
+		return 0
+	}
+
+	s := &Session{
+		vx:     vx,
+		k:      k,
+		fg:     fg,
+		enc:    enc,
+		events: make(chan vaxis.Event, 32),
+		msgs:   make(chan wire.Msg, 16),
+	}
+	if open.Geo != nil {
+		s.geo = *open.Geo
+	}
+	// Seed the panel's measured cell metrics from the settled size. The
+	// spare is pinned to its output, so it is already at the on-screen scale
+	// even while parked; revealing it fires no resize event, so submenu row
+	// alignment must take real pixels-per-cell from here, not the bar's
+	// estimate.
+	{
+		ws := vx.Size()
+		s.setSize(ws.Cols, ws.Rows, ws.XPixel, ws.YPixel)
+	}
+
+	// Size to the target while still off-screen (at the settled real scale),
+	// so the app draws at the final size. Skip when already the right size
+	// (a menu that happens to match the spawn size), since no resize event
+	// would fire to wait for.
+	if open.Cols > 0 && open.Rows > 0 {
+		if c, r := vx.Window().Size(); c != open.Cols || r != open.Rows {
+			k.Resize(open.Cols, open.Rows)
+			if ev, ok := awaitResize(vx, open.Cols, open.Rows, resizeWait); ok {
+				vx.Resize(ev) // update vaxis size before the app draws
+				s.setSize(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
 			}
 		}
-	}()
+	}
+	// Discard any trailing resize events so the app's first draw is real
+	// content (which triggers the on-screen reveal), not an empty frame.
+	drainEvents(vx)
 
+	app := appLookup(open.Kind)
+	if app == nil {
+		logging.Log.Error().Msgf("menus: unknown menu kind %q", open.Kind)
+		return 1
+	}
+
+	go s.hostLoop(vx, ctrl)
 	return app(s)
+}
+
+// hostLoop is the per-menu boilerplate: it is the only sender on s.events
+// and the only party that closes it; the app exits by draining the closed
+// channel. Esc and focus events are handled here and never reach the app.
+func (s *Session) hostLoop(vx *vaxis.Vaxis, ctrl <-chan wire.Msg) {
+	defer close(s.events)
+	focused := false
+	for {
+		select {
+		case ev := <-vx.Events():
+			switch ev := ev.(type) {
+			case vaxis.Resize:
+				vx.Resize(ev) // keep vaxis size/buffers in sync before the app redraws
+				s.setSize(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
+			case vaxis.Key:
+				if ev.EventType == vaxis.EventPress && ev.Keycode == vaxis.KeyEsc {
+					return
+				}
+			case vaxis.FocusIn:
+				focused = true
+				s.Send(wire.Msg{Type: wire.MsgFocusGained})
+				continue
+			case vaxis.FocusOut:
+				// Only report after a real focus: compositors can emit a
+				// spurious FocusOut at map time, which would otherwise
+				// close the menu as it opens.
+				if focused {
+					s.Send(wire.Msg{Type: wire.MsgFocusLost})
+				}
+				continue
+			case vaxis.QuitEvent:
+				return
+			}
+			s.events <- ev
+		case m, ok := <-ctrl:
+			if !ok {
+				// Wire gone: the bar died or tore the stream down.
+				return
+			}
+			if m.Type == wire.MsgClose {
+				return
+			}
+			if m.Geo != nil {
+				s.setGeometry(*m.Geo)
+			}
+			select {
+			case s.msgs <- m:
+			default:
+			}
+		}
+	}
+}
+
+// awaitResize consumes vaxis events until a Resize (matching cols x rows,
+// or any when cols == 0) arrives, or the timeout elapses. Used only in the
+// single-consumer warm/resize phases, before hostLoop takes over vx.Events.
+func awaitResize(vx *vaxis.Vaxis, cols, rows int, timeout time.Duration) (vaxis.Resize, bool) {
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev := <-vx.Events():
+			if r, ok := ev.(vaxis.Resize); ok {
+				if cols == 0 || (r.Cols == cols && r.Rows == rows) {
+					return r, true
+				}
+			}
+		case <-deadline:
+			return vaxis.Resize{}, false
+		}
+	}
+}
+
+// waitOpen blocks until the bar sends MsgOpen, draining vaxis events in the
+// meantime so an idle spare never stalls vaxis. Returns false if the wire
+// closes or MsgClose arrives first.
+func waitOpen(vx *vaxis.Vaxis, ctrl <-chan wire.Msg) (wire.Msg, bool) {
+	for {
+		select {
+		case <-vx.Events():
+			// discard while idle/off-screen
+		case m, ok := <-ctrl:
+			if !ok || m.Type == wire.MsgClose {
+				return wire.Msg{}, false
+			}
+			if m.Type == wire.MsgOpen {
+				return m, true
+			}
+		}
+	}
+}
+
+func drainEvents(vx *vaxis.Vaxis) {
+	for {
+		select {
+		case <-vx.Events():
+		default:
+			return
+		}
+	}
+}
+
+func queryForeground(vx *vaxis.Vaxis) color.RGBA {
+	c := vx.QueryForeground()
+	rgb := c.Params()
+	return color.RGBA{R: rgb[0], G: rgb[1], B: rgb[2], A: 255}
 }

@@ -25,11 +25,12 @@ const (
 	// focusGrace is how long a menu tree may be entirely unfocused
 	// before it closes; covers the handoff between parent and submenu.
 	focusGrace = 250 * time.Millisecond
-	// spawnFocusGrace suspends focus-loss closing while a freshly
-	// spawned panel is still starting up: the parent loses focus as
-	// soon as the new panel maps, but the panel only reports
-	// FocusGained once its kitty process and TUI are running.
-	spawnFocusGrace = 2 * time.Second
+	// spawnFocusGrace suspends focus-loss closing while a just-acquired
+	// panel reveals itself: the parent loses focus as soon as the panel
+	// is assigned, but the panel only reports FocusGained once it has
+	// rendered off-screen and moved on-screen with exclusive focus.
+	// Warm spares are pre-mapped, so this only covers the ~200ms reveal.
+	spawnFocusGrace = 1 * time.Second
 	// closeWait bounds how long we wait for a panel to exit after
 	// MsgClose+Stop before killing it.
 	closeWait = 500 * time.Millisecond
@@ -71,9 +72,9 @@ func openRoot(o owner, name string, at Anchor, wCells, hCells int, autoClose boo
 		return nil, nil
 	}
 
-	x, y, geo := clampRoot(at, wCells, hCells)
+	_, _, geo := clampRoot(at, wCells, hCells)
 	t := &tree{owner: o, autoClose: autoClose, focused: make(map[*Handle]bool)}
-	h, err := t.spawn(name, x, y, wCells, hCells, geo)
+	h, err := t.spawn(name, wCells, hCells, geo)
 	if err != nil {
 		return nil, err
 	}
@@ -107,34 +108,42 @@ type tree struct {
 	suppressUntil time.Time
 }
 
-// spawn starts a panel and appends it to the tree.
-func (t *tree) spawn(name string, x, y, wCells, hCells int, geo wire.Geometry) (*Handle, error) {
+// spawn takes a warm panel from the pool, assigns it a menu (kind, size,
+// placement) via MsgOpen, and appends it to the tree. The caller then
+// streams content (MsgUpdate), which the host renders off-screen before
+// revealing itself on-screen.
+func (t *tree) spawn(kind string, wCells, hCells int, geo wire.Geometry) (*Handle, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return nil, errors.New("menu already closed")
 	}
-	panel, err := spawnPanel(name, x, y, wCells, hCells)
+	acqStart := time.Now()
+	wp, err := pool.acquire()
 	if err != nil {
 		return nil, err
 	}
-	// The new panel steals focus from its parent long before it can
-	// report FocusGained; don't let that window read as "the menu
-	// lost focus".
+	logging.Log.Debug().Msgf("menus: acquired %q spare in %s", kind, time.Since(acqStart))
+	// The panel grabs focus from its parent long before it can report
+	// FocusGained; don't let that window read as "the menu lost focus".
 	t.suppressUntil = time.Now().Add(spawnFocusGrace)
 	if t.focusTimer != nil {
 		t.focusTimer.Stop()
 		t.focusTimer = nil
 	}
 	h := &Handle{
-		panel:  panel,
+		panel:  wp.panel,
+		enc:    wp.enc,
+		dec:    wp.dec,
 		tree:   t,
-		enc:    cbor.NewEncoder(panel.Writer()),
 		msgs:   make(chan wire.Msg, 32),
 		done:   make(chan struct{}),
 		geo:    geo,
 		wCells: wCells,
 		hCells: hCells,
+	}
+	if err := h.Send(wire.Msg{Type: wire.MsgOpen, Kind: kind, Geo: &geo, Cols: wCells, Rows: hCells}); err != nil {
+		logging.Log.Warn().Msgf("menus: sending open: %v", err)
 	}
 	t.panels = append(t.panels, h)
 	go h.read()
@@ -271,11 +280,14 @@ func (t *tree) focusTimeout() {
 	t.close()
 }
 
-// Handle is the bar process's grip on one live menu panel.
+// Handle is the bar process's grip on one live menu panel. The enc/dec
+// come from the pooled warm panel, so the wire has exactly one reader
+// across the pool→Handle handoff.
 type Handle struct {
 	panel  *katnip.Panel
 	tree   *tree
 	enc    *cbor.Encoder
+	dec    *cbor.Decoder
 	encMu  sync.Mutex
 	msgs   chan wire.Msg
 	done   chan struct{}
@@ -313,8 +325,8 @@ func (h *Handle) OpenSub(name string, row, wCells, hCells int) (*Handle, error) 
 	h.geoMu.Lock()
 	geo, pw := h.geo, h.wCells
 	h.geoMu.Unlock()
-	x, y, subGeo := placeSubmenu(geo, pw, row, wCells, hCells)
-	return h.tree.spawn(name, x, y, wCells, hCells, subGeo)
+	_, _, subGeo := placeSubmenu(geo, pw, row, wCells, hCells)
+	return h.tree.spawn(name, wCells, hCells, subGeo)
 }
 
 // Geometry returns the panel's current placement.
@@ -346,7 +358,7 @@ func (h *Handle) shutdown() {
 // read pumps child->parent messages: lifecycle ones go to the tree,
 // the rest to Messages().
 func (h *Handle) read() {
-	dec := cbor.NewDecoder(h.panel.Reader())
+	dec := h.dec
 	defer close(h.msgs)
 	for {
 		var m wire.Msg

@@ -7,7 +7,6 @@
 package menus
 
 import (
-	"image/color"
 	"time"
 
 	"github.com/nekorg/pawbar/pkg/menus/wire"
@@ -70,10 +69,7 @@ func (st *listState) navigate(delta int) {
 func listApp(s *Session) int {
 	st := &listState{row: -1}
 
-	c := s.Vx().QueryForeground()
-	rgb := c.Params()
-	fg := color.RGBA{R: rgb[0], G: rgb[1], B: rgb[2], A: 255}
-
+	fg := s.Foreground()
 	r := newListRenderer(s.Window(), fg)
 
 	// submenuReq carries this panel's measured cell metrics so the bar

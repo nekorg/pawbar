@@ -15,6 +15,7 @@ const (
 	// parent -> child
 	MsgUpdate MsgType = iota // replace the item list (and optionally geometry)
 	MsgClose                 // exit now
+	MsgOpen                  // become Kind, size to Cols x Rows, reveal at Geo
 
 	// child -> parent
 	MsgClicked       // item activated (click or Enter)
@@ -24,6 +25,7 @@ const (
 	MsgFocusLost     // panel lost keyboard focus (sent only after first focus)
 	MsgFocusGained   // panel gained keyboard focus
 	MsgResized       // panel resized itself; Geo carries the new position/size
+	MsgReady         // host is warm (mapped off-screen) and awaiting MsgOpen
 )
 
 type Toggle int8
@@ -63,9 +65,10 @@ type Geometry struct {
 
 type Msg struct {
 	Type       MsgType
+	Kind       string    `cbor:",omitempty"` // menu renderer to run (MsgOpen)
 	Items      []Item    `cbor:",omitempty"`
 	ItemID     int32     `cbor:",omitempty"`
 	Row        int       `cbor:",omitempty"`
-	Cols, Rows int       `cbor:",omitempty"` // panel size in cells (MsgResized)
+	Cols, Rows int       `cbor:",omitempty"` // panel size in cells (MsgOpen, MsgResized)
 	Geo        *Geometry `cbor:",omitempty"`
 }

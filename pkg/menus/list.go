@@ -150,7 +150,12 @@ type listCtrl struct {
 	reg    map[int32]listEntry
 }
 
-var iconLookup = xdgicons.NewIconLookupWithConfig(xdgicons.LookupConfig{FallbackTheme: "Adwaita"})
+// iconLookup builds the xdg icon index lazily: only the bar resolves icon
+// paths (menu children receive already-resolved paths), so warm menu
+// spares never pay the icon-theme scan at process start.
+var iconLookup = sync.OnceValue(func() *xdgicons.IconLookup {
+	return xdgicons.NewIconLookupWithConfig(xdgicons.LookupConfig{FallbackTheme: "Adwaita"})
+})
 
 func resolveIconPath(name string) string {
 	if name == "" {
@@ -158,9 +163,9 @@ func resolveIconPath(name string) string {
 	}
 	var icon xdgicons.Icon
 	if strings.HasSuffix(name, "-symbolic") {
-		icon, _ = iconLookup.Lookup(name)
+		icon, _ = iconLookup().Lookup(name)
 	} else {
-		icon, _ = iconLookup.FindBestIcon([]string{name + "-symbolic", name}, 48, 2)
+		icon, _ = iconLookup().FindBestIcon([]string{name + "-symbolic", name}, 48, 2)
 	}
 	return icon.Path
 }

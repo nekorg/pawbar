@@ -27,6 +27,10 @@ import (
 
 func init() {
 	katnip.RegisterFunc("pawbar", mainLoop)
+	// Register the generic menu-host identity last, so every menu kind is
+	// in the registry before a re-exec'd host dispatches on it. cmd's init
+	// runs after the menus/module packages it imports have registered.
+	menus.RegisterHost()
 }
 
 // Pawbar parses flags and launches the bar panel. The kitty child process
@@ -187,6 +191,10 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	}
 
 	render()
+
+	// Warm the first menu spare now that the bar is up, so even the first
+	// menu opens without paying the kitty spawn cost.
+	menus.PrewarmPool()
 
 	for {
 		select {
