@@ -25,14 +25,16 @@ type Hit struct {
 
 // cell is one laid-out grapheme plus its hit metadata.
 type cell struct {
-	c      vaxis.Cell
-	hit    Hit
-	hasMod bool
+	c        vaxis.Cell
+	hit      Hit
+	hasMod   bool
+	isSpacer bool
 }
 
 var (
 	width, height int
 	snapshots     [3][][]module.Segment // [side][slot] -> segments
+	spacers       [3][]bool             // [side][slot] -> spacer module?
 	state         []cell
 	truncOrder    []string
 	useEllipsis   bool
@@ -58,7 +60,7 @@ func Init(w, h int, settings config.BarSettings) {
 	width, height = w, h
 	truncOrder = settings.TruncatePriority
 	useEllipsis = settings.EnableEllipsis == nil || *settings.EnableEllipsis
-	ellipsisCells = textToCells(settings.Ellipsis, vaxis.Style{}, Hit{}, false)
+	ellipsisCells = textToCells(settings.Ellipsis, vaxis.Style{}, Hit{}, false, false)
 	ellipsisWidth = totalWidth(ellipsisCells)
 	// kitty can report mouse events at the very edge, one past width.
 	state = make([]cell, width+1)
@@ -69,6 +71,15 @@ func SetSlotCounts(l, m, r int) {
 	snapshots[0] = make([][]module.Segment, l)
 	snapshots[1] = make([][]module.Segment, m)
 	snapshots[2] = make([][]module.Segment, r)
+}
+
+// SetSpacerSlots records which slots are spacer modules, so their edge
+// cells can donate click area to adjacent modules. Indexing matches
+// SetSlotCounts.
+func SetSpacerSlots(l, m, r []bool) {
+	spacers[0] = l
+	spacers[1] = m
+	spacers[2] = r
 }
 
 // SetSnapshot stores a slot's latest render output.
@@ -85,12 +96,26 @@ func Resize(w, h int) {
 	state = make([]cell, width+1)
 }
 
-// HitAt maps a bar column to the slot beneath it.
-func HitAt(col int) (Hit, bool) {
+// HitAt maps a bar column to the slot beneath it. leftHalf tells which half
+// of the cell the pointer is on: a spacer cell donates its module-facing
+// half to an adjacent non-spacer module, widening that module's hitbox.
+func HitAt(col int, leftHalf bool) (Hit, bool) {
 	if col < 0 || col >= len(state) {
 		return Hit{}, false
 	}
 	c := state[col]
+	if c.isSpacer {
+		nbr := col + 1
+		if leftHalf {
+			nbr = col - 1
+		}
+		if nbr >= 0 && nbr < len(state) {
+			n := state[nbr]
+			if n.hasMod && !n.isSpacer {
+				return n.hit, true
+			}
+		}
+	}
 	return c.hit, c.hasMod
 }
 

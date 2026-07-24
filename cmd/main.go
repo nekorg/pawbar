@@ -156,6 +156,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	log.Debug().Msgf("panel size (cells): %d, %d", w, h)
 	tui.Init(w, h, bar.Settings)
 	tui.SetSlotCounts(engine.SlotCounts())
+	tui.SetSpacerSlots(engine.SpacerSlots())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -210,7 +211,14 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 					updateMouseShape(vx, vaxis.MouseShapeDefault, &mouseShape)
 					continue
 				}
-				hit, ok := tui.HitAt(ev.Col)
+				leftHalf := true
+				if sz := vx.Size(); sz.XPixel > 0 && sz.Cols > 0 {
+					// Pixel offset within the clicked cell; inverts
+					// vaxis's own Col = XPixel*Cols/XPixel_total.
+					rem := (ev.XPixel * sz.Cols) % sz.XPixel
+					leftHalf = rem*2 < sz.XPixel
+				}
+				hit, ok := tui.HitAt(ev.Col, leftHalf)
 				engine.Mouse(core.Side(hit.Side), hit.Index, hit.Region, ev, ok)
 				shape := vaxis.MouseShapeDefault
 				if ok {
@@ -262,6 +270,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			engine.Reload(bar)
 			tui.Init(w, h, bar.Settings)
 			tui.SetSlotCounts(engine.SlotCounts())
+			tui.SetSpacerSlots(engine.SpacerSlots())
 			// Reseed the fresh slot tables with every runner's last
 			// output: kept modules must not blank out until their next
 			// event.

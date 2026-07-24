@@ -20,6 +20,14 @@ func Static(name, text string) Def {
 	}
 }
 
+// Spacer builds a Static Def flagged as a visual gap: its edge cells donate
+// their module-facing half to an adjacent module, widening its click hitbox.
+func Spacer(name, text string) Def {
+	def := Static(name, text)
+	def.Spacer = true
+	return def
+}
+
 type staticModule struct{}
 
 func (m *staticModule) Init(ctx *Ctx) error { return nil }

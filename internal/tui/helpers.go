@@ -40,23 +40,25 @@ func buildBlocks() []block {
 func flatten(side int) []cell {
 	var out []cell
 	for idx, segs := range snapshots[side] {
+		spacer := idx < len(spacers[side]) && spacers[side][idx]
 		for _, seg := range segs {
 			hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
-			out = append(out, textToCells(seg.Text, seg.Style, hit, true)...)
+			out = append(out, textToCells(seg.Text, seg.Style, hit, true, spacer)...)
 		}
 	}
 	return out
 }
 
 // textToCells splits text into grapheme cells carrying hit metadata.
-func textToCells(s string, style vaxis.Style, hit Hit, hasMod bool) []cell {
+func textToCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []cell {
 	chars := vaxis.Characters(s)
 	out := make([]cell, 0, len(chars))
 	for _, ch := range chars {
 		out = append(out, cell{
-			c:      vaxis.Cell{Character: ch, Style: style},
-			hit:    hit,
-			hasMod: hasMod,
+			c:        vaxis.Cell{Character: ch, Style: style},
+			hit:      hit,
+			hasMod:   hasMod,
+			isSpacer: spacer,
 		})
 	}
 	return out
@@ -85,7 +87,7 @@ func writeCell(win vaxis.Window, x int, c cell) int {
 	for w := 1; w < c.c.Width; w++ {
 		empty := vaxis.Cell{Style: c.c.Style}
 		win.SetCell(x+w, 0, empty)
-		state[x+w] = cell{c: empty, hit: c.hit, hasMod: c.hasMod}
+		state[x+w] = cell{c: empty, hit: c.hit, hasMod: c.hasMod, isSpacer: c.isSpacer}
 	}
 	return x + c.c.Width
 }

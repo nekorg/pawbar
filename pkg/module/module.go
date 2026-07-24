@@ -139,6 +139,10 @@ type VerbArgs struct {
 type Def struct {
 	Name string
 	Doc  string
+	// Spacer marks the module as a visual gap (e.g. space, sep): its edge
+	// cells donate their module-facing half to an adjacent non-spacer
+	// module, widening that module's click hitbox.
+	Spacer bool
 	// New returns a fresh, un-initialized module instance.
 	New func() Module
 	// Options returns a pointer to a zero value of the module's options

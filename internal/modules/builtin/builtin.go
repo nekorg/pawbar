@@ -32,6 +32,6 @@ import (
 )
 
 func init() {
-	module.Register(module.Static("sep", " │ "))
-	module.Register(module.Static("space", " "))
+	module.Register(module.Spacer("sep", " │ "))
+	module.Register(module.Spacer("space", " "))
 }
