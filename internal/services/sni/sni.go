@@ -1029,15 +1029,27 @@ func decodePixmap(v dbus.Variant) image.Image {
 
 func (s *Service) watchItemProps(it *Item, done <-chan struct{}) {
 	defer logging.Recover("sni.watchItemProps")
-	rule := fmt.Sprintf("type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='%s',sender='%s'",
-		it.Path, it.BusName)
-	s.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, rule)
+	sender := it.BusName
+	if !strings.HasPrefix(sender, ":") {
+		var owner string
+		if err := s.conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, sender).Store(&owner); err == nil {
+			sender = owner
+		}
+	}
+
+	propsRule := fmt.Sprintf("type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='%s',sender='%s'",
+		it.Path, sender)
+	iconRule := fmt.Sprintf("type='signal',interface='%s',member='NewIcon',path='%s',sender='%s'",
+		ifaceItem, it.Path, sender)
+	s.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, propsRule)
+	s.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, iconRule)
 
 	ch := make(chan *dbus.Signal, 16)
 	s.conn.Signal(ch)
 	defer func() {
 		s.conn.RemoveSignal(ch)
-		s.conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, rule)
+		s.conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, propsRule)
+		s.conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, iconRule)
 	}()
 
 	for {
@@ -1046,28 +1058,45 @@ func (s *Service) watchItemProps(it *Item, done <-chan struct{}) {
 			return
 		case <-done:
 			return
-		case sig := <-ch:
-			if sig == nil || sig.Name != "org.freedesktop.DBus.Properties.PropertiesChanged" {
+		case sig, ok := <-ch:
+			if !ok {
+				return
+			}
+			if sig == nil || sig.Path != it.Path || sig.Sender != sender {
 				continue
 			}
 
-			// Verify it's for our item
-			if sig.Path != it.Path || sig.Sender != it.BusName {
-				continue
+			switch sig.Name {
+			case "org.freedesktop.DBus.Properties.PropertiesChanged":
+				if len(sig.Body) < 2 {
+					continue
+				}
+				iface, _ := sig.Body[0].(string)
+				if iface != ifaceItem {
+					continue
+				}
+				changed, _ := sig.Body[1].(map[string]dbus.Variant)
+				s.applyChanges(it, changed)
+			case ifaceItem + ".NewIcon":
+				s.refreshIcon(it)
 			}
-
-			if len(sig.Body) < 2 {
-				continue
-			}
-
-			iface, _ := sig.Body[0].(string)
-			if iface != ifaceItem {
-				continue
-			}
-
-			changed, _ := sig.Body[1].(map[string]dbus.Variant)
-			s.applyChanges(it, changed)
 		}
+	}
+}
+
+// refreshIcon rereads the properties covered by NewIcon, whose signal has no
+// payload, and applies them through the normal item-change path.
+func (s *Service) refreshIcon(it *Item) {
+	obj := s.conn.Object(it.BusName, it.Path)
+	changed := make(map[string]dbus.Variant, 2)
+	for _, name := range []string{"IconName", "IconPixmap"} {
+		var v dbus.Variant
+		if err := obj.Call("org.freedesktop.DBus.Properties.Get", 0, ifaceItem, name).Store(&v); err == nil {
+			changed[name] = v
+		}
+	}
+	if len(changed) != 0 {
+		s.applyChanges(it, changed)
 	}
 }
 
@@ -1209,9 +1238,7 @@ func (s *Service) applyChanges(it *Item, changed map[string]dbus.Variant) {
 				it.IconThemeDir = str
 			}
 		case "IconPixmap":
-			if img := decodePixmap(v); img != nil {
-				it.IconPixmap = img
-			}
+			it.IconPixmap = decodePixmap(v)
 		case "Menu":
 			if p, ok := v.Value().(dbus.ObjectPath); ok {
 				it.MenuPath = p

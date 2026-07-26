@@ -20,7 +20,7 @@ import (
 // poolTarget is how many warm spares to keep hot. One spare keeps the
 // invariant "live panels = visible + 1": opening a menu (or submenu)
 // consumes the spare and refills in the background.
-const poolTarget = 1
+const poolTarget = 2
 
 // readyTimeout bounds waiting for a freshly spawned spare to warm up
 // (kitty spawn + vaxis handshake + off-screen map). Generous; the wait
