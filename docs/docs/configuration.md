@@ -227,8 +227,9 @@ template: '{{shrink .title}} • {{shrink 2 .artists}}'
 ```
 
 `shrink` marks its output, so a pipeline stage that rewrites that output
-(`{{shrink .title | printf "%q"}}`) loses the marking and the value becomes
-ordinary rigid text. Appending after it is fine.
+(<code>&#123;&#123;shrink .title | printf "%q"&#125;&#125;</code>) loses the
+marking and the value becomes ordinary rigid text. Appending after it is
+fine.
 
 ## Compact formats
 
