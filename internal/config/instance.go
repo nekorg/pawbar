@@ -25,6 +25,9 @@ type Instance struct {
 	// overridden per-button by the entry's `on:` (a null entry binding
 	// removes the button).
 	On map[string][]module.Action
+	// Priority orders this slot against the others when the bar runs out
+	// of room: the lowest steps down its format ladder first. Default 0.
+	Priority int
 	// Hash identifies the entry's raw configuration; hot reload compares
 	// it to decide keep/reconfigure/restart.
 	Hash string
@@ -100,6 +103,17 @@ func compileEntry(e ModuleEntry, path string, theme *compiledTheme, barDefaults 
 	var defs *yaml.Node
 	if useDefaults {
 		defs = defaultsNode(def)
+	}
+
+	// Shipped defaults may set a priority; the entry overrides it.
+	for _, src := range []*yaml.Node{defs, e.Node} {
+		n := subNode(src, "priority")
+		if n == nil {
+			continue
+		}
+		if err := n.Decode(&inst.Priority); err != nil {
+			issues.add(path+".priority", n, "%s", yamlErr(err))
+		}
 	}
 
 	inst.Table = buildTable(def, e.Node, defs, theme, path, issues)

@@ -108,7 +108,7 @@ func drainText(t *testing.T, e *Engine, want string) Update {
 	for {
 		select {
 		case u := <-e.Updates():
-			if len(u.Segs) > 0 && u.Segs[0].Text == want {
+			if len(u.Widest()) > 0 && u.Widest()[0].Text == want {
 				return u
 			}
 		case <-deadline:
@@ -122,7 +122,7 @@ func TestEngineLifecycle(t *testing.T) {
 
 	// Init render arrives.
 	u := waitUpdate(t, e, 2*time.Second)
-	if u.Side != Right || u.Index != 0 || len(u.Segs) == 0 {
+	if u.Side != Right || u.Index != 0 || len(u.Widest()) == 0 {
 		t.Fatalf("bad first update: %+v", u)
 	}
 
@@ -187,7 +187,7 @@ func TestEngineConditionStateStyling(t *testing.T) {
 	for {
 		select {
 		case u := <-e.Updates():
-			if len(u.Segs) > 0 && u.Segs[0].Style.Foreground == module.MustColor("#ff0000").Go() {
+			if len(u.Widest()) > 0 && u.Widest()[0].Style.Foreground == module.MustColor("#ff0000").Go() {
 				return // busy state styling applied via SetState from handler
 			}
 		case <-deadline:
@@ -208,8 +208,8 @@ func TestEngineUnknownModuleChips(t *testing.T) {
 	t.Cleanup(e.Stop)
 
 	u := waitUpdate(t, e, 2*time.Second)
-	if len(u.Segs) == 0 || u.Segs[0].Text != "⚠nope" {
-		t.Fatalf("expected error chip, got %+v", u.Segs)
+	if len(u.Widest()) == 0 || u.Widest()[0].Text != "⚠nope" {
+		t.Fatalf("expected error chip, got %+v", u.Widest())
 	}
 
 	// Interacting with a chip must not wedge anything.

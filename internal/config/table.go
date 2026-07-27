@@ -167,7 +167,7 @@ func buildTable(def module.Def, entry, defs *yaml.Node, theme *compiledTheme,
 
 	// Shipped defaults use the entry schema minus the `defaults` switch.
 	dpath := fmt.Sprintf("module %q defaults", def.Name)
-	defsKeys := append(append(append([]string{}, blockTags...), "states", "on"), optTags...)
+	defsKeys := append(append(append([]string{}, blockTags...), "states", "on", "priority"), optTags...)
 	checkKeys(defs, dpath, defsKeys, issues)
 	defsBlock := decodeBlock(defs, dpath, issues)
 

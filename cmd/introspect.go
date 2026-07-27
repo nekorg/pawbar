@@ -77,6 +77,9 @@ func dumpResolved() int {
 				}
 			}
 			blockInto(out, inst.Table.ResolveBlock(nil))
+			if inst.Priority != 0 {
+				out["priority"] = inst.Priority
+			}
 			if on := onInto(inst.On); len(on) > 0 {
 				out["on"] = on
 			}
@@ -115,11 +118,13 @@ func blockInto(out map[string]any, b module.Block) {
 	if b.Cursor != nil {
 		out["cursor"] = string(*b.Cursor)
 	}
+	// MarshalYAML rather than String, so a format ladder round-trips as the
+	// yaml list it was written as.
 	if b.Format != nil {
-		out["format"] = b.Format.String()
+		out["format"], _ = b.Format.MarshalYAML()
 	}
 	if b.Template != nil {
-		out["template"] = b.Template.String()
+		out["template"], _ = b.Template.MarshalYAML()
 	}
 }
 

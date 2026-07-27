@@ -161,6 +161,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	tui.Init(w, h, bar.Settings)
 	tui.SetSlotCounts(engine.SlotCounts())
 	tui.SetSpacerSlots(engine.SpacerSlots())
+	tui.SetSlotPriorities(engine.SlotPriorities())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -239,12 +240,12 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			}
 
 		case u := <-engine.Updates():
-			tui.SetSnapshot(int(u.Side), u.Index, u.Segs)
+			tui.SetSnapshot(int(u.Side), u.Index, u.Levels)
 			// Coalesce whatever else is already queued before rendering.
 			for {
 				select {
 				case u = <-engine.Updates():
-					tui.SetSnapshot(int(u.Side), u.Index, u.Segs)
+					tui.SetSnapshot(int(u.Side), u.Index, u.Levels)
 					continue
 				default:
 				}
@@ -279,11 +280,12 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			tui.Init(w, h, bar.Settings)
 			tui.SetSlotCounts(engine.SlotCounts())
 			tui.SetSpacerSlots(engine.SpacerSlots())
+			tui.SetSlotPriorities(engine.SlotPriorities())
 			// Reseed the fresh slot tables with every runner's last
 			// output: kept modules must not blank out until their next
 			// event.
-			engine.Snapshots(func(side core.Side, idx int, segs []module.Segment) {
-				tui.SetSnapshot(int(side), idx, segs)
+			engine.Snapshots(func(side core.Side, idx int, levels [][]module.Segment) {
+				tui.SetSnapshot(int(side), idx, levels)
 			})
 			render()
 

@@ -43,9 +43,9 @@ func buildBlocks() []block {
 // pass can shrink the elastic ones individually.
 func flatten(side int) []run {
 	var out []run
-	for idx, segs := range snapshots[side] {
+	for idx := range snapshots[side] {
 		spacer := idx < len(spacers[side]) && spacers[side][idx]
-		for _, seg := range segs {
+		for _, seg := range slotSegments(side, idx) {
 			hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
 			if seg.Image != nil && seg.Cells > 0 {
 				out = append(out, run{cells: imageCells(seg, hit, spacer)})

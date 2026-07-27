@@ -7,6 +7,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -45,7 +46,8 @@ func setupFit(t *testing.T, w, shrinkMin int, segs []module.Segment) []run {
 	})
 	SetSlotCounts(0, 0, 1)
 	SetSpacerSlots(nil, nil, []bool{false})
-	SetSnapshot(2, 0, segs)
+	SetSlotPriorities(nil, nil, []int{0})
+	SetSnapshot(2, 0, [][]module.Segment{segs})
 
 	return fit()[2]
 }
@@ -178,6 +180,137 @@ func TestFitIsStable(t *testing.T) {
 	}
 }
 
+// setupLadder puts one slot per side entry at a given width, each with its
+// own detail levels and priority, and returns the laid-out text per side.
+func setupLadder(t *testing.T, w int, prios []int, slots [][][]module.Segment) []string {
+	t.Helper()
+	Init(w, 1, config.BarSettings{
+		TruncatePriority: []string{"right", "left", "middle"},
+		Ellipsis:         "…",
+		ShrinkMin:        3,
+	})
+	SetSlotCounts(len(slots), 0, 0)
+	SetSpacerSlots(make([]bool, len(slots)), nil, nil)
+	SetSlotPriorities(prios, nil, nil)
+	for i, s := range slots {
+		SetSnapshot(0, i, s)
+	}
+
+	fit()
+	out := make([]string, len(slots))
+	for i := range slots {
+		out[i] = segsText(slotSegments(0, i))
+	}
+	return out
+}
+
+func segsText(segs []module.Segment) string {
+	s := ""
+	for _, seg := range segs {
+		s += seg.Text
+	}
+	return s
+}
+
+// rungs builds a slot's ladder from plain rigid strings, widest first.
+func rungs(texts ...string) [][]module.Segment {
+	out := make([][]module.Segment, len(texts))
+	for i, t := range texts {
+		out[i] = []module.Segment{{Text: t}}
+	}
+	return out
+}
+
+func TestFitStepsDownLadder(t *testing.T) {
+	// Two modules, each able to drop from 8 columns to 3.
+	slots := [][][]module.Segment{
+		rungs("AAAAAAAA", "AAA"),
+		rungs("BBBBBBBB", "BBB"),
+	}
+
+	cases := []struct {
+		name  string
+		width int
+		prios []int
+		want  []string
+	}{
+		{
+			name:  "room for everything",
+			width: 20,
+			prios: []int{0, 0},
+			want:  []string{"AAAAAAAA", "BBBBBBBB"},
+		},
+		{
+			// Only one needs to give way; the innermost goes first.
+			name:  "one step is enough",
+			width: 12,
+			prios: []int{0, 0},
+			want:  []string{"AAAAAAAA", "BBB"},
+		},
+		{
+			name:  "both step down",
+			width: 6,
+			prios: []int{0, 0},
+			want:  []string{"AAA", "BBB"},
+		},
+		{
+			// Priority overrides position: the lower one degrades first
+			// even though it sits further out.
+			name:  "priority decides who gives way",
+			width: 12,
+			prios: []int{-1, 0},
+			want:  []string{"AAA", "BBBBBBBB"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := setupLadder(t, c.width, c.prios, slots)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("got %v want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Levels are recomputed each frame, so a bar that widens back out must
+// recover the detail it gave up.
+func TestFitLadderRecoversOnWidening(t *testing.T) {
+	slots := [][][]module.Segment{rungs("AAAAAAAA", "AAA")}
+
+	if got := setupLadder(t, 4, []int{0}, slots); got[0] != "AAA" {
+		t.Fatalf("narrow: got %q want %q", got[0], "AAA")
+	}
+	if got := setupLadder(t, 40, []int{0}, slots); got[0] != "AAAAAAAA" {
+		t.Errorf("widened again: got %q want %q", got[0], "AAAAAAAA")
+	}
+}
+
+// Shrinking comes first: a module with both elastic text and a ladder
+// shortens its text before it drops structure.
+func TestFitShrinksBeforeSteppingDown(t *testing.T) {
+	Init(8, 1, config.BarSettings{
+		TruncatePriority: []string{"right", "left", "middle"},
+		Ellipsis:         "…",
+		ShrinkMin:        3,
+	})
+	SetSlotCounts(1, 0, 0)
+	SetSpacerSlots([]bool{false}, nil, nil)
+	SetSlotPriorities([]int{0}, nil, nil)
+	SetSnapshot(0, 0, [][]module.Segment{
+		{{Text: ">"}, {Text: "TITLETITLE", Shrink: 1}}, // 11 columns
+		{{Text: ">"}}, // the compact rung
+	})
+
+	// 11 into 8: the elastic title alone can close the gap, so the rung
+	// with no title at all must not be reached.
+	if got, want := runsText(fit()[0]), ">TITLET…"; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	if levels[0][0] != 0 {
+		t.Errorf("stepped down to level %d when shrinking was enough", levels[0][0])
+	}
+}
+
 // setupSides lays out all three anchors at once: each entry is one slot's
 // segments, and order is the bar.truncate_priority to place them in.
 func setupSides(t *testing.T, w int, order []string, l, m, r []module.Segment) [3][]run {
@@ -189,8 +322,9 @@ func setupSides(t *testing.T, w int, order []string, l, m, r []module.Segment) [
 	})
 	SetSlotCounts(1, 1, 1)
 	SetSpacerSlots([]bool{false}, []bool{false}, []bool{false})
+	SetSlotPriorities([]int{0}, []int{0}, []int{0})
 	for side, segs := range [3][]module.Segment{l, m, r} {
-		SetSnapshot(side, 0, segs)
+		SetSnapshot(side, 0, [][]module.Segment{segs})
 	}
 	return fit()
 }
@@ -274,7 +408,8 @@ func TestEndToEndElasticFormat(t *testing.T) {
 	})
 	SetSlotCounts(0, 0, 1)
 	SetSpacerSlots(nil, nil, []bool{false})
-	SetSnapshot(2, 0, w.Segments())
+	SetSlotPriorities(nil, nil, []int{0})
+	SetSnapshot(2, 0, w.Levels())
 
 	// 27 columns into 21: the icon and the " * " are untouchable, and the
 	// two elastic pieces level off at 8 each.

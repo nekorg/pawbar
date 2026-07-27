@@ -26,9 +26,18 @@ const (
 
 // Update is a module's fresh render snapshot, addressed by slot.
 type Update struct {
-	Side  Side
-	Index int
-	Segs  []module.Segment
+	Side   Side
+	Index  int
+	Levels [][]module.Segment
+}
+
+// Widest returns the module's output at its fullest detail level, which is
+// what it draws when the bar has room for everything.
+func (u Update) Widest() []module.Segment {
+	if len(u.Levels) == 0 {
+		return nil
+	}
+	return u.Levels[0]
 }
 
 // Engine owns all runners and routes input to them. Its exported methods
@@ -89,6 +98,21 @@ func (e *Engine) SpacerSlots() (l, m, r []bool) {
 	return flags(Left), flags(Middle), flags(Right)
 }
 
+// SlotPriorities reports each slot's degrade order for the layout: the
+// lowest steps down its format ladder first when space runs short.
+// Indexing matches SlotCounts.
+func (e *Engine) SlotPriorities() (l, m, r []int) {
+	ranks := func(side Side) []int {
+		s := e.sides[side]
+		out := make([]int, len(s))
+		for i, run := range s {
+			out[i] = run.in().Priority
+		}
+		return out
+	}
+	return ranks(Left), ranks(Middle), ranks(Right)
+}
+
 // Updates delivers render snapshots; the main loop drains it.
 func (e *Engine) Updates() <-chan Update { return e.updates }
 
@@ -96,7 +120,7 @@ func (e *Engine) Updates() <-chan Update { return e.updates }
 // main loop uses it to reseed the layout after a reload rebuilt the slot
 // tables: kept runners only push updates when their output changes, so
 // without reseeding they would stay blank until their next event.
-func (e *Engine) Snapshots(fn func(side Side, idx int, segs []module.Segment)) {
+func (e *Engine) Snapshots(fn func(side Side, idx int, levels [][]module.Segment)) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	for s, side := range e.sides {

@@ -125,8 +125,12 @@ optional; unset keys inherit from the layer below.
 | `fg`, `bg` | colors: CSS names, `#hex`, `rgb(r,g,b)`, `@var` |
 | `bold`, `dim`, `italic`, `underline`, `blink`, `reverse`, `strikethrough` | booleans |
 | `cursor` | pointer shape while hovering ([CSS cursor names](https://developer.mozilla.org/en-US/docs/Web/CSS/cursor)) |
-| `format` | placeholder format string (see below) |
+| `format` | placeholder format string (see below), or a list of them from widest to most [compact](#compact-formats) |
 | `template` | opt-in Go `text/template` alternative to `format` |
+
+`priority` sits alongside the block keys but is not one: it is per entry
+rather than per state, and orders which modules go
+[compact](#compact-formats) first.
 
 Block keys go directly at the top level of a module entry:
 
@@ -180,8 +184,9 @@ is *centered*, so it splits the bar in half — with a clock in the middle,
 the right side can only use the columns past it, however empty the left
 half is.
 
-If shrinking alone cannot close the gap, the bar falls back to trimming
-whole blocks by `bar.truncate_priority` as before.
+If shrinking alone cannot close the gap, modules start
+[stepping down](#compact-formats); if that runs out too, the bar falls back
+to trimming blocks by `bar.truncate_priority` as before.
 
 In a `template`, wrap the value in `shrink` instead:
 
@@ -192,6 +197,50 @@ template: '{{shrink .title}} • {{shrink 2 .artists}}'
 `shrink` marks its output, so a pipeline stage that rewrites that output
 (`{{shrink .title | printf "%q"}}`) loses the marking and the value becomes
 ordinary rigid text. Appending after it is fine.
+
+## Compact formats
+
+Shrinking only makes text shorter. When a module would rather *drop* part
+of itself than have everything squeezed, give `format` a list — widest
+first:
+
+```yaml
+- battery:
+    format:
+      - "{icon} {bat}% ({time})"
+      - "{icon} {bat}%"
+      - "{icon}"
+```
+
+The bar shows the first entry that fits and steps down only as far as it
+has to. Nothing is dropped while any elastic text still has room to give,
+so `~` and a format list combine cleanly: text shortens first, structure
+goes last.
+
+When several modules could step down, the one with the lowest `priority`
+goes first; ties break toward the middle of the bar, so the modules at the
+outer edges keep their detail longest.
+
+```yaml
+- cpu: { priority: -1 }     # first to go compact
+- clock: { priority: 1 }    # last
+```
+
+`priority` defaults to `0` and can be set in a module's shipped defaults
+too. Levels are recomputed from scratch on every redraw, so widening the
+bar back out restores whatever a narrower one gave up.
+
+This pairs naturally with `hover`, which re-expands a module under the
+pointer no matter how narrow the bar is:
+
+```yaml
+- battery:
+    format: ["{icon} {bat}%", "{icon}"]
+    states:
+      hover: { format: "{icon} {bat}% ({time})" }
+```
+
+`template` accepts a list in exactly the same way.
 
 ## States
 

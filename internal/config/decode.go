@@ -21,7 +21,7 @@ var blockTags = tagsOf(module.Block{})
 
 // reservedEntryKeys are entry keys that are neither Block style nor module
 // options.
-var reservedEntryKeys = []string{"states", "on", "defaults"}
+var reservedEntryKeys = []string{"states", "on", "defaults", "priority"}
 
 // tagsOf returns the yaml tags of v's struct fields.
 func tagsOf(v any) []string {

@@ -58,8 +58,12 @@ var (
 
 var (
 	width, height int
-	snapshots     [3][][]module.Segment // [side][slot] -> segments
-	spacers       [3][]bool             // [side][slot] -> spacer module?
+	// [side][slot][level] -> segments, levels widest first.
+	snapshots  [3][][][]module.Segment
+	spacers    [3][]bool // [side][slot] -> spacer module?
+	priorities [3][]int  // [side][slot] -> degrade order, lowest first
+	// levels[side][slot] is the detail level the last fit chose.
+	levels        [3][]int
 	state         []cell
 	truncOrder    []string
 	useEllipsis   bool
@@ -95,9 +99,19 @@ func Init(w, h int, settings config.BarSettings) {
 
 // SetSlotCounts sizes the snapshot store: one slot per module instance.
 func SetSlotCounts(l, m, r int) {
-	snapshots[0] = make([][]module.Segment, l)
-	snapshots[1] = make([][]module.Segment, m)
-	snapshots[2] = make([][]module.Segment, r)
+	for side, n := range [3]int{l, m, r} {
+		snapshots[side] = make([][][]module.Segment, n)
+		levels[side] = make([]int, n)
+	}
+}
+
+// SetSlotPriorities records each slot's degrade order: when the bar runs
+// out of room, the lowest priority steps down its format ladder first.
+// Indexing matches SetSlotCounts.
+func SetSlotPriorities(l, m, r []int) {
+	priorities[0] = l
+	priorities[1] = m
+	priorities[2] = r
 }
 
 // SetSpacerSlots records which slots are spacer modules, so their edge
@@ -109,12 +123,23 @@ func SetSpacerSlots(l, m, r []bool) {
 	spacers[2] = r
 }
 
-// SetSnapshot stores a slot's latest render output.
-func SetSnapshot(side, idx int, segs []module.Segment) {
+// SetSnapshot stores a slot's latest render output: one segment run per
+// detail level, widest first.
+func SetSnapshot(side, idx int, slotLevels [][]module.Segment) {
 	if side < 0 || side > 2 || idx < 0 || idx >= len(snapshots[side]) {
 		return
 	}
-	snapshots[side][idx] = segs
+	snapshots[side][idx] = slotLevels
+}
+
+// slotSegments returns the segments a slot draws at its currently chosen
+// detail level.
+func slotSegments(side, idx int) []module.Segment {
+	slot := snapshots[side][idx]
+	if len(slot) == 0 {
+		return nil
+	}
+	return slot[min(levels[side][idx], len(slot)-1)]
 }
 
 // Resize adjusts to a new window size.

@@ -136,13 +136,91 @@ func runsWidth(runs []run) int {
 	return w
 }
 
-// fit lays every side out, shrinking its elastic runs to the room it has.
-// Shrinking only ever shortens text; when the elastic runs have hit their
-// floor, Render's positional trim is still there as the last resort.
+// fit lays every side out at the widest detail level that fits.
+//
+// Shrinking is tried first, because it only ever shortens text. Only when
+// the elastic runs have hit their floor does a module step down its format
+// ladder, which is the one thing allowed to drop structure — and the lowest
+// priority goes first. If the ladders run out too, Render's positional trim
+// is still there as the last resort.
+//
+// Levels are recomputed from scratch every frame, so widening the bar back
+// out restores the detail a narrower one gave up.
 func fit() [3][]run {
+	for side := range levels {
+		clear(levels[side])
+	}
 	runs := [3][]run{flatten(0), flatten(1), flatten(2)}
-	shrink(&runs)
+	for !shrink(&runs) && stepDown() {
+		runs = [3][]run{flatten(0), flatten(1), flatten(2)}
+	}
 	return runs
+}
+
+// stepDown moves one slot to its next, more compact level and reports
+// whether it found one. Candidates are ordered by priority, then by
+// distance from the bar's outer edge (the innermost gives way first), then
+// by the side's own truncation priority — enough to make the choice
+// deterministic without asking the user to rank every module.
+func stepDown() bool {
+	best, bestSide := -1, -1
+	var bestRank rank
+	for side := range snapshots {
+		for idx := range snapshots[side] {
+			if levels[side][idx]+1 >= len(snapshots[side][idx]) {
+				continue
+			}
+			r := rank{slotPriority(side, idx), edgeDistance(side, idx), sideRank(side)}
+			if best == -1 || r.less(bestRank) {
+				best, bestSide, bestRank = idx, side, r
+			}
+		}
+	}
+	if best == -1 {
+		return false
+	}
+	levels[bestSide][best]++
+	return true
+}
+
+// rank orders step-down candidates; lower goes first.
+type rank [3]int
+
+func (r rank) less(o rank) bool {
+	for i := range r {
+		if r[i] != o[i] {
+			return r[i] < o[i]
+		}
+	}
+	return false
+}
+
+func slotPriority(side, idx int) int {
+	if idx < len(priorities[side]) {
+		return priorities[side][idx]
+	}
+	return 0
+}
+
+// edgeDistance is how far a slot sits from the outer edge its side is
+// anchored to. Negated so that the innermost slot sorts first.
+func edgeDistance(side, idx int) int {
+	if side == 2 { // right: the outer edge is the end of the list
+		return idx - len(snapshots[side])
+	}
+	return -idx
+}
+
+// sideRank orders the sides by bar.truncate_priority: the side listed first
+// keeps its content longest, so it degrades last.
+func sideRank(side int) int {
+	name := [3]string{"left", "middle", "right"}[side]
+	for i, n := range truncOrder {
+		if n == name {
+			return len(truncOrder) - i
+		}
+	}
+	return 0
 }
 
 // waterfill distributes budget columns over the elastic runs by weighted

@@ -150,10 +150,10 @@ func TestSnapshotsReseedAfterReload(t *testing.T) {
 	e.Reload(bar)
 
 	seen := 0
-	e.Snapshots(func(side Side, idx int, segs []module.Segment) {
+	e.Snapshots(func(side Side, idx int, levels [][]module.Segment) {
 		seen++
-		if side != Right || idx != 0 || len(segs) == 0 {
-			t.Fatalf("bad snapshot: side=%v idx=%d segs=%v", side, idx, segs)
+		if side != Right || idx != 0 || len(levels) == 0 || len(levels[0]) == 0 {
+			t.Fatalf("bad snapshot: side=%v idx=%d levels=%v", side, idx, levels)
 		}
 	})
 	if seen != 1 {

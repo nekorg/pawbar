@@ -67,7 +67,7 @@ type runner struct {
 	lastPanic   time.Time
 
 	segsMu   sync.Mutex
-	lastSegs []module.Segment
+	lastSegs [][]module.Segment
 }
 
 func newRunner(eng *Engine, side Side, idx int, inst *config.Instance) *runner {
@@ -260,28 +260,28 @@ func (r *runner) render() {
 	if err := w.Err(); err != nil {
 		r.eng.log.Error().Str("module", r.in().Name).Msgf("render: %v", err)
 	}
-	r.publish(w.Segments())
+	r.publish(w.Levels())
 }
 
-func (r *runner) publish(segs []module.Segment) {
+func (r *runner) publish(segs [][]module.Segment) {
 	r.segsMu.Lock()
-	same := slices.Equal(r.lastSegs, segs)
+	same := slices.EqualFunc(r.lastSegs, segs, slices.Equal)
 	if !same {
 		r.lastSegs = segs
 	}
 	r.segsMu.Unlock()
 	if !same {
-		r.eng.push(r, Update{Side: r.side, Index: r.idx, Segs: segs})
+		r.eng.push(r, Update{Side: r.side, Index: r.idx, Levels: segs})
 	}
 }
 
-func (r *runner) chipSegments() []module.Segment {
-	return []module.Segment{{
+func (r *runner) chipSegments() [][]module.Segment {
+	return [][]module.Segment{{{
 		Text:   "⚠" + r.in().Name,
 		Style:  vaxis.Style{Foreground: vaxis.IndexColor(9)},
 		Region: "error",
 		Shape:  vaxis.MouseShapeHelp,
-	}}
+	}}}
 }
 
 // setState flips a state; runner goroutine only.

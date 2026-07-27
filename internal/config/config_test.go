@@ -457,3 +457,45 @@ func TestExampleConfigIsClean(t *testing.T) {
 		t.Fatalf("example config should populate sides")
 	}
 }
+
+func TestPriorityCascades(t *testing.T) {
+	bar, issues := compileString(t, `
+right:
+  - tclock
+  - tclock: { priority: -2 }
+`)
+	if len(issues) > 0 {
+		t.Fatalf("unexpected issues: %v", issues.Err())
+	}
+	if got := bar.Right[0].Priority; got != 0 {
+		t.Errorf("unset priority should default to 0, got %d", got)
+	}
+	if got := bar.Right[1].Priority; got != -2 {
+		t.Errorf("entry priority: got %d want -2", got)
+	}
+}
+
+// A yaml list of formats compiles into a ladder the layout can step down.
+func TestFormatListCompiles(t *testing.T) {
+	bar, issues := compileString(t, `
+right:
+  - tclock:
+      format:
+        - "{time:%H:%M:%S}"
+        - "{time:%H:%M}"
+`)
+	if len(issues) > 0 {
+		t.Fatalf("unexpected issues: %v", issues.Err())
+	}
+	f := bar.Right[0].Table.ResolveBlock(nil).Format
+	if f == nil {
+		t.Fatal("no format resolved")
+	}
+	if got := f.Levels(); got != 2 {
+		t.Fatalf("got %d levels want 2", got)
+	}
+	// The tick has to keep up with the most detailed level on the ladder.
+	if got := f.TimeGranularity(); got != time.Second {
+		t.Errorf("granularity: got %v want %v", got, time.Second)
+	}
+}
