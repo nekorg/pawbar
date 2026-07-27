@@ -69,6 +69,7 @@ var (
 	useEllipsis   bool
 	ellipsisCells []cell
 	ellipsisWidth int
+	gapCells      []cell
 	shrinkMin     int
 )
 
@@ -86,12 +87,16 @@ type block struct {
 }
 
 // Init prepares the layout state. Can be called again (reload).
-func Init(w, h int, settings config.BarSettings) {
+func Init(w, h int, settings config.BarSettings, gapStyle vaxis.Style) {
 	width, height = w, h
 	truncOrder = settings.TruncatePriority
 	useEllipsis = settings.EnableEllipsis == nil || *settings.EnableEllipsis
 	ellipsisCells = textToCells(settings.Ellipsis, vaxis.Style{}, Hit{}, false, false)
 	ellipsisWidth = totalWidth(ellipsisCells)
+	// Gap cells claim no module of their own: hasMod is false so they
+	// never absorb a click, and isSpacer lets HitAt donate them to the
+	// neighbour the pointer is leaning toward.
+	gapCells = textToCells(settings.Gap, gapStyle, Hit{}, false, true)
 	shrinkMin = settings.ShrinkMin
 	// kitty can report mouse events at the very edge, one past width.
 	state = make([]cell, width+1)

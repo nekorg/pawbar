@@ -83,9 +83,9 @@ func (e *Engine) SlotCounts() (l, m, r int) {
 	return len(e.sides[Left]), len(e.sides[Middle]), len(e.sides[Right])
 }
 
-// SpacerSlots reports, per side, which slots are spacer modules (space,
-// sep). The layout uses this to donate a spacer's edge cells to adjacent
-// modules. Indexing matches SlotCounts / the snapshot tables.
+// SpacerSlots reports, per side, which slots are spacer modules (gap). The
+// layout uses this to donate a spacer's edge cells to adjacent modules.
+// Indexing matches SlotCounts / the snapshot tables.
 func (e *Engine) SpacerSlots() (l, m, r []bool) {
 	flags := func(side Side) []bool {
 		s := e.sides[side]

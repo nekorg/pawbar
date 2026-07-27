@@ -158,7 +158,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 
 	w, h := win.Size()
 	log.Debug().Msgf("panel size (cells): %d, %d", w, h)
-	tui.Init(w, h, bar.Settings)
+	tui.Init(w, h, bar.Settings, bar.GapStyle)
 	tui.SetSlotCounts(engine.SlotCounts())
 	tui.SetSpacerSlots(engine.SpacerSlots())
 	tui.SetSlotPriorities(engine.SlotPriorities())
@@ -277,7 +277,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			log.Info().Msg("config: reloading")
 			bar = newBar
 			engine.Reload(bar)
-			tui.Init(w, h, bar.Settings)
+			tui.Init(w, h, bar.Settings, bar.GapStyle)
 			tui.SetSlotCounts(engine.SlotCounts())
 			tui.SetSpacerSlots(engine.SpacerSlots())
 			tui.SetSlotPriorities(engine.SlotPriorities())

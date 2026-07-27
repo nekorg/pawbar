@@ -8,31 +8,12 @@ package tui
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/pkg/module"
+	"go.rockorager.dev/vaxis"
 )
-
-// layout state is package-global, so these tests reseed it and cannot run
-// in parallel.
-
-func cellsText(cells []cell) string {
-	var b strings.Builder
-	for _, c := range cells {
-		b.WriteString(c.c.Character.Grapheme)
-	}
-	return b.String()
-}
-
-func runsText(runs []run) string {
-	var b strings.Builder
-	for _, r := range runs {
-		b.WriteString(cellsText(r.cells))
-	}
-	return b.String()
-}
 
 // setupFit puts segs in one right-anchored slot at a given bar width, the
 // shape of the config that motivated all this. Text is ASCII so the column
@@ -43,7 +24,7 @@ func setupFit(t *testing.T, w, shrinkMin int, segs []module.Segment) []run {
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        shrinkMin,
-	})
+	}, vaxis.Style{})
 	SetSlotCounts(0, 0, 1)
 	SetSpacerSlots(nil, nil, []bool{false})
 	SetSlotPriorities(nil, nil, []int{0})
@@ -188,7 +169,7 @@ func setupLadder(t *testing.T, w int, prios []int, slots [][][]module.Segment) [
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,
-	})
+	}, vaxis.Style{})
 	SetSlotCounts(len(slots), 0, 0)
 	SetSpacerSlots(make([]bool, len(slots)), nil, nil)
 	SetSlotPriorities(prios, nil, nil)
@@ -292,7 +273,7 @@ func TestFitShrinksBeforeSteppingDown(t *testing.T) {
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,
-	})
+	}, vaxis.Style{})
 	SetSlotCounts(1, 0, 0)
 	SetSpacerSlots([]bool{false}, nil, nil)
 	SetSlotPriorities([]int{0}, nil, nil)
@@ -319,7 +300,7 @@ func setupSides(t *testing.T, w int, order []string, l, m, r []module.Segment) [
 		TruncatePriority: order,
 		Ellipsis:         "…",
 		ShrinkMin:        3,
-	})
+	}, vaxis.Style{})
 	SetSlotCounts(1, 1, 1)
 	SetSpacerSlots([]bool{false}, []bool{false}, []bool{false})
 	SetSlotPriorities([]int{0}, []int{0}, []int{0})
@@ -405,7 +386,7 @@ func TestEndToEndElasticFormat(t *testing.T) {
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,
-	})
+	}, vaxis.Style{})
 	SetSlotCounts(0, 0, 1)
 	SetSpacerSlots(nil, nil, []bool{false})
 	SetSlotPriorities(nil, nil, []int{0})

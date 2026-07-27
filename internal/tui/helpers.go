@@ -40,11 +40,20 @@ func buildBlocks() []block {
 }
 
 // flatten lays a side's slots out as runs — one per segment, so the fitting
-// pass can shrink the elastic ones individually.
+// pass can shrink the elastic ones individually — dropping spacers that have
+// gone stranded and inserting the configured gap between neighbours.
 func flatten(side int) []run {
+	visible := visibleSlots(side)
+
 	var out []run
-	for idx := range snapshots[side] {
-		spacer := idx < len(spacers[side]) && spacers[side][idx]
+	prevSpacer, first := false, true
+	for _, idx := range visible {
+		spacer := isSpacer(side, idx)
+		if !first && len(gapCells) > 0 && !prevSpacer && !spacer {
+			out = append(out, run{cells: clone(gapCells)})
+		}
+		first, prevSpacer = false, spacer
+
 		for _, seg := range slotSegments(side, idx) {
 			hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
 			if seg.Image != nil && seg.Cells > 0 {
@@ -56,6 +65,66 @@ func flatten(side int) []run {
 				shrink: seg.Shrink,
 			})
 		}
+	}
+	return out
+}
+
+func isSpacer(side, idx int) bool {
+	return idx < len(spacers[side]) && spacers[side][idx]
+}
+
+// visibleSlots returns the slots of a side that take part in the layout, in
+// order: everything that draws, plus spacers, which count even when empty.
+//
+// A slot with no segments contributes nothing, which leaves separators
+// stranded: `[cpu, gap: " │ ", mpris]` with no player would draw a trailing
+// "cpu │ ". So a spacer is dropped when the modules on a side it faces
+// exist but are all empty. Facing *nothing* is different from facing
+// something empty: a trailing divider at the edge of a side faces the rest
+// of the bar rather than a neighbour, and is kept.
+func visibleSlots(side int) []int {
+	n := len(snapshots[side])
+	empty := make([]bool, n)
+	for i := range n {
+		empty[i] = len(slotSegments(side, i)) == 0
+	}
+
+	// anyL[i] reports whether any non-spacer slot below i has output,
+	// and existsL[i] whether any non-spacer slot is there at all.
+	anyL, existsL := make([]bool, n+1), make([]bool, n+1)
+	for i := range n {
+		anyL[i+1], existsL[i+1] = anyL[i], existsL[i]
+		if isSpacer(side, i) {
+			continue
+		}
+		existsL[i+1] = true
+		anyL[i+1] = anyL[i] || !empty[i]
+	}
+	anyR, existsR := make([]bool, n+1), make([]bool, n+1)
+	for i := n - 1; i >= 0; i-- {
+		anyR[i], existsR[i] = anyR[i+1], existsR[i+1]
+		if isSpacer(side, i) {
+			continue
+		}
+		existsR[i] = true
+		anyR[i] = anyR[i+1] || !empty[i]
+	}
+
+	out := make([]int, 0, n)
+	for i := range n {
+		if isSpacer(side, i) {
+			if (existsL[i] && !anyL[i]) || (existsR[i+1] && !anyR[i+1]) {
+				continue
+			}
+			// An empty spacer is kept: `- gap: ""` draws nothing, and its
+			// whole purpose is to sit here suppressing the automatic gap.
+			out = append(out, i)
+			continue
+		}
+		if empty[i] {
+			continue
+		}
+		out = append(out, i)
 	}
 	return out
 }

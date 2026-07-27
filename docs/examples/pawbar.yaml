@@ -2,6 +2,8 @@
 # ~/.config/pawbar/pawbar.yaml
 
 bar:
+  gap: " "                # breathing room between adjacent modules
+                          # (a `gap` entry overrides it at one join)
   truncate_priority: [right, left, middle]
   ellipsis: "…"
   # strict: true          # fail hard on any config error (also: pawbar --strict)
@@ -17,7 +19,7 @@ theme:
 
 left:
   - ws
-  - sep
+  - gap: " │ "            # a divider instead of the usual gap
 
 right:
   - volume:
@@ -28,7 +30,7 @@ right:
         left: toggle-mute
         scroll-up: volume-up
         scroll-down: volume-down
-  - sep
+  - gap: " │ "
   - clock:
       format: "{time:%H:%M}"
       states:

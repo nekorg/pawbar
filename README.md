@@ -60,11 +60,15 @@ It has 18 modules (all customisable upto a certain extent,for now):
  - `wifi`: A simple wifi conenction indicator (without menu, interatable on clicks)
  - `ws`: A dynamic workspace switcher (hyprland/i3/sway) with (with mouse events) (change workspace on click)
 
- - `space`: A single space
- - `sep`: A full height vertical bar and a space on either side
+ - `gap`: The punctuation between modules: a space by default, `- gap: ""` to
+   join two modules flush, `- gap: " │ "` for a divider. `bar.gap` sets the
+   default for every join, so most configs need no entries at all.
 
 A typical config looks like:
 ```yaml
+bar:
+  gap: " "                # breathing room between every pair of modules
+
 theme:
   defaults:
     states:
@@ -78,13 +82,9 @@ right:
   - volume:
       states:
         muted: { fg: "@warning" }
-  - space
-  - sep
-  - space
+  - gap: " │ "            # override bar.gap at this one join
   - battery
-  - space
-  - sep
-  - space
+  - gap: " │ "
   - clock:
       format: "{time:%H:%M}"
       states:

@@ -44,6 +44,7 @@ It sets a right anchored `clock` module with default configuration
 A useful default configuration can be:
 ```yaml
 bar:
+  gap: " "
   truncate_priority:
     - middle
     - right
@@ -60,9 +61,9 @@ right:
   - volume:
       on:
         right: { run: "pavucontrol" }
-  - sep
+  - gap: " │ "
   - backlight
-  - sep
+  - gap: " │ "
   - battery
 ```
 

@@ -32,6 +32,9 @@ import (
 )
 
 func init() {
-	module.Register(module.Spacer("sep", " │ "))
-	module.Register(module.Spacer("space", " "))
+	// gap is the only punctuation module: written between two entries it
+	// overrides bar.gap at that join, and `- gap: ""` joins them flush.
+	// It replaces the old sep and space, which differed only in default
+	// text; config.removedModules points the way for existing configs.
+	module.Register(module.Spacer("gap", " "))
 }

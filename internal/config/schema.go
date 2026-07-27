@@ -31,6 +31,11 @@ type BarSettings struct {
 	EnableEllipsis   *bool    `yaml:"enable_ellipsis"`
 	Ellipsis         string   `yaml:"ellipsis"`
 	Strict           bool     `yaml:"strict"`
+	// Gap is inserted between adjacent non-empty modules on a side.
+	// Empty (the default) keeps modules flush, as before; an explicit
+	// `gap` entry is never padded with it, so writing one overrides this
+	// at that join.
+	Gap string `yaml:"gap"`
 	// ShrinkMin is the floor, in columns, that an elastic placeholder
 	// ({title~}) is never shrunk below.
 	ShrinkMin int `yaml:"shrink_min"`
@@ -216,17 +221,42 @@ func parseEntries(n *yaml.Node, side string, issues *Issues) []ModuleEntry {
 					"a module entry must be a bare name or a single `name: {options}` mapping")
 				continue
 			}
-			out = append(out, ModuleEntry{
-				Name: item.Content[0].Value,
-				Node: item.Content[1],
-				Line: item.Content[0].Line,
-				Col:  item.Content[0].Column,
-			})
+			key, val := item.Content[0], item.Content[1]
+			e := ModuleEntry{Name: key.Value, Line: key.Line, Col: key.Column}
+			switch {
+			case isNull(val): // `- clock:` with nothing under it
+			case val.Kind == yaml.ScalarNode:
+				e.Node = formatShorthand(val)
+			default:
+				e.Node = val
+			}
+			out = append(out, e)
 		default:
 			issues.add(path, item, "invalid module entry")
 		}
 	}
 	return out
+}
+
+// formatShorthand expands a scalar entry value into a one-key options
+// mapping: `- gap: " │ "` means `- gap: {format: " │ "}`. Format is the only
+// key a scalar entry could plausibly mean, and it keeps a bar's punctuation
+// (gaps, dividers) on one line each.
+func formatShorthand(v *yaml.Node) *yaml.Node {
+	key := &yaml.Node{
+		Kind:   yaml.ScalarNode,
+		Tag:    "!!str",
+		Value:  "format",
+		Line:   v.Line,
+		Column: v.Column,
+	}
+	return &yaml.Node{
+		Kind:    yaml.MappingNode,
+		Tag:     "!!map",
+		Content: []*yaml.Node{key, v},
+		Line:    v.Line,
+		Column:  v.Column,
+	}
 }
 
 // expandVars replaces scalar values of the form "@name" with the value of

@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/nekorg/pawbar/pkg/module"
+	"go.rockorager.dev/vaxis"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,6 +44,10 @@ type Bar struct {
 	Left     []*Instance
 	Middle   []*Instance
 	Right    []*Instance
+	// GapStyle draws Settings.Gap. Auto-gaps are layout, not modules, so
+	// they have no entry of their own to style; they take theme.defaults.
+	// Styling one join means writing a `gap` entry there.
+	GapStyle vaxis.Style
 }
 
 // Instances iterates all slots left to right.
@@ -62,7 +67,7 @@ func Compile(f *File) (*Bar, Issues) {
 	theme := compileTheme(&f.Theme, &issues)
 	barDefaults := f.Bar.Defaults == nil || *f.Bar.Defaults
 
-	bar := &Bar{Settings: f.Bar}
+	bar := &Bar{Settings: f.Bar, GapStyle: theme.block.Style()}
 	bar.Left = compileSide(f.Left, "left", theme, barDefaults, &issues)
 	bar.Middle = compileSide(f.Middle, "middle", theme, barDefaults, &issues)
 	bar.Right = compileSide(f.Right, "right", theme, barDefaults, &issues)
@@ -84,8 +89,11 @@ func compileEntry(e ModuleEntry, path string, theme *compiledTheme, barDefaults 
 	def, ok := module.Lookup(e.Name)
 	if !ok {
 		before := len(*issues)
-		issues.addHint(path, e.node(), didYouMean(e.Name, module.Names()),
-			"unknown module %q", e.Name)
+		hint := didYouMean(e.Name, module.Names())
+		if r, gone := removedModules[e.Name]; gone {
+			hint = r
+		}
+		issues.addHint(path, e.node(), hint, "unknown module %q", e.Name)
 		inst.Err = &(*issues)[before]
 		return inst
 	}

@@ -390,24 +390,34 @@ states:
 Options, placeholders and states are identical to [`disk`](#disk),
 minus `path` (and with its own default `icon`).
 
-## `sep`, `space`
+## `gap`
 
-Static separator and spacer. Their shipped defaults are just a format:
+The punctuation between modules. Written between two entries it overrides
+[`bar.gap`](/docs/configuration#bar) at that one join, and `- gap: ""` puts
+its neighbours flush together.
 
-```yaml
-format: " │ "
-```
+Shipped defaults are just a format:
 
 ```yaml
 format: " "
 ```
 
-Styleable and replaceable like any module:
+A scalar entry sets the format, so a bar's punctuation stays one line each,
+and block keys style it like any other module:
 
 ```yaml
-- sep: { fg: "@cool" }
-- sep: { format: " · " }
+- gap: ""                                # neighbours flush together
+- gap: "   "                             # wider than bar.gap, here only
+- gap: " · "                             # a divider
+- gap: { format: " │ ", fg: "@cool" }    # a styled divider
 ```
+
+An automatic `bar.gap` is never inserted next to a `gap` entry, so writing
+one replaces it at that join rather than doubling up on it.
+
+`gap` replaces the old `sep` and `space` modules, which were the same module
+with different default text: write `- gap: " │ "` for the former and
+`- gap: " "` for the latter.
 
 ## `sessioncontrols`
 

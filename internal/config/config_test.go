@@ -221,6 +221,20 @@ func TestUnknownModule(t *testing.T) {
 	}
 }
 
+// sep and space are gone; a config still using them gets told what to
+// write rather than a did-you-mean for whatever happens to be closest.
+func TestRemovedModulesPointAtGap(t *testing.T) {
+	_, issues := compileString(t, "right: [sep, space]\n")
+	if len(issues) != 2 {
+		t.Fatalf("want an issue per entry, got %v", issues.Err())
+	}
+	for _, i := range issues {
+		if !strings.Contains(i.Hint, "gap") {
+			t.Errorf("hint should point at gap, got %+v", i)
+		}
+	}
+}
+
 func TestUnknownVerbAndState(t *testing.T) {
 	_, issues := compileString(t, `
 right:
@@ -472,6 +486,34 @@ right:
 	}
 	if got := bar.Right[1].Priority; got != -2 {
 		t.Errorf("entry priority: got %d want -2", got)
+	}
+}
+
+// A scalar entry value is shorthand for the format, which is what keeps
+// punctuation entries (`- gap: " │ "`) to one line.
+func TestScalarEntryIsFormatShorthand(t *testing.T) {
+	bar, issues := compileString(t, `
+right:
+  - tclock: "{time:%H:%M}"
+  - tclock: ""
+  - tclock:
+`)
+	if len(issues) > 0 {
+		t.Fatalf("unexpected issues: %v", issues.Err())
+	}
+	want := []string{"{time:%H:%M}", "", "{time:%H:%M}"} // the last is shipped
+	for i, w := range want {
+		f := bar.Right[i].Table.ResolveBlock(nil).Format
+		if f == nil {
+			t.Fatalf("entry %d: no format resolved", i)
+		}
+		if got := f.String(); got != w {
+			t.Errorf("entry %d: got %q want %q", i, got, w)
+		}
+	}
+	// A bare `- name:` is still the shipped default, not an empty format.
+	if bar.Right[1].Hash == bar.Right[2].Hash {
+		t.Error(`- tclock: "" and - tclock: should not hash alike`)
 	}
 }
 

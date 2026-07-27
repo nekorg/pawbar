@@ -18,9 +18,16 @@ import (
 )
 
 func TestBuiltinsRegistered(t *testing.T) {
-	for _, n := range []string{"sep", "space", "clock", "volume", "ws"} {
+	for _, n := range []string{"gap", "clock", "volume", "ws"} {
 		if _, ok := module.Lookup(n); !ok {
 			t.Errorf("module %q not registered", n)
+		}
+	}
+	// sep and space were folded into gap; an old config must fail loudly
+	// rather than find something else under those names.
+	for _, n := range []string{"sep", "space"} {
+		if _, ok := module.Lookup(n); ok {
+			t.Errorf("module %q should have been removed", n)
 		}
 	}
 }
@@ -95,7 +102,7 @@ func TestDocsCoverModules(t *testing.T) {
 
 // docSection returns the body under the module heading that mentions
 // `name`, up to the next "## " heading. Headings may cover more than one
-// module (e.g. "## `sep`, `space`"), so it matches on the backticked name
+// module (e.g. "## `cpu`, `ram`"), so it matches on the backticked name
 // rather than the whole heading.
 func docSection(doc, name string) (string, bool) {
 	token := "`" + name + "`"

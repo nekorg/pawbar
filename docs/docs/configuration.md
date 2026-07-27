@@ -29,6 +29,7 @@ merged per-slot configuration for cascade debugging.
 
 ```yaml
 bar:
+  gap: " "
   shrink_min: 3
   truncate_priority: [right, left, middle]
   enable_ellipsis: true
@@ -37,6 +38,12 @@ bar:
   defaults: true
 ```
 
+- `gap`: inserted between adjacent modules on a side, so you don't have to
+  spell one out between every pair. Empty (the default) keeps modules flush.
+  Automatic gaps are layout rather than modules: they are never added at a
+  side's edge, never next to an explicit [`gap` entry](#separators-and-gaps),
+  and they take `theme.defaults` styling — for anything else, write the join
+  out.
 - `shrink_min`: the floor, in columns, that an
   [elastic placeholder](#elastic-text) is never shrunk below.
 - `truncate_priority`: which anchors keep their content when the bar
@@ -68,13 +75,13 @@ theme:
 
 # Modules
 
-Each side is a list. An entry is a bare name or a `name: {options}`
-mapping:
+Each side is a list. An entry is a bare name, a `name: {options}` mapping,
+or `name: "text"` — a scalar is shorthand for setting just `format`:
 
 ```yaml
 left:
   - ws
-  - sep
+  - gap: " │ "
 middle:
   - clock:
       format: "{time:%H:%M}"
@@ -82,7 +89,32 @@ right:
   - volume
 ```
 
-`sep` and `space` are static separator modules.
+## Separators and gaps
+
+[`bar.gap`](#bar) handles the usual case: uniform breathing room between
+every pair of modules, with nothing to write per entry. Where one join
+should differ, write a `gap` entry there and it wins:
+
+```yaml
+right:
+  - cpu
+  - gap: ""          # cpu and ram flush together
+  - ram
+  - gap: " │ "       # a divider instead of the usual gap
+  - clock
+```
+
+An automatic gap is never inserted next to an explicit one, so entries
+replace `bar.gap` at that join rather than doubling up on it. `gap` takes
+block keys like any module (`- gap: { format: " │ ", fg: "@dim" }`). It
+replaces the old `sep` and `space` modules: write `- gap: " │ "` and
+`- gap: " "`.
+
+A module that has nothing to show (mpris with no player, tray with no
+icons) takes up no room, and a separator left facing only empty modules is
+dropped with it — so you never get a stranded `│` floating at the end of a
+side. A separator at the very edge of a side is kept: it divides that side
+from the rest of the bar rather than from a neighbour.
 
 ## Shipped defaults
 

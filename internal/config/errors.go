@@ -84,6 +84,14 @@ func (is Issues) Err() error {
 	return fmt.Errorf("%s", strings.Join(msgs, "\n"))
 }
 
+// removedModules maps a module name that no longer exists onto the hint
+// that replaces the usual "did you mean": these are close to nothing by
+// edit distance, so an old config would otherwise get no guidance at all.
+var removedModules = map[string]string{
+	"sep":   `replaced by gap: write ` + "`- gap: \" │ \"`",
+	"space": `replaced by gap: write ` + "`- gap: \" \"`",
+}
+
 // didYouMean returns a hint string when key is within edit distance 2 of a
 // known key, else "".
 func didYouMean(key string, known []string) string {
