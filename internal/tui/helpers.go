@@ -23,31 +23,38 @@ func anchorOf(s string) anchor {
 }
 
 // buildBlocks flattens the snapshots into one cell run per side, ordered
-// by truncation priority.
+// by truncation priority, with elastic segments already shrunk to fit.
 func buildBlocks() []block {
-	cells := map[string][]cell{
-		"left":   flatten(0),
-		"middle": flatten(1),
-		"right":  flatten(2),
-	}
+	runs := fit()
+
+	sides := map[string]int{"left": 0, "middle": 1, "right": 2}
 	blocks := make([]block, 0, 3)
 	for _, name := range truncOrder {
-		blocks = append(blocks, block{cells: cells[name], side: anchorOf(name)})
+		var cells []cell
+		for _, r := range runs[sides[name]] {
+			cells = append(cells, r.cells...)
+		}
+		blocks = append(blocks, block{cells: cells, side: anchorOf(name)})
 	}
 	return blocks
 }
 
-func flatten(side int) []cell {
-	var out []cell
+// flatten lays a side's slots out as runs — one per segment, so the fitting
+// pass can shrink the elastic ones individually.
+func flatten(side int) []run {
+	var out []run
 	for idx, segs := range snapshots[side] {
 		spacer := idx < len(spacers[side]) && spacers[side][idx]
 		for _, seg := range segs {
 			hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
 			if seg.Image != nil && seg.Cells > 0 {
-				out = append(out, imageCells(seg, hit, spacer)...)
+				out = append(out, run{cells: imageCells(seg, hit, spacer)})
 				continue
 			}
-			out = append(out, textToCells(seg.Text, seg.Style, hit, true, spacer)...)
+			out = append(out, run{
+				cells:  textToCells(seg.Text, seg.Style, hit, true, spacer),
+				shrink: seg.Shrink,
+			})
 		}
 	}
 	return out

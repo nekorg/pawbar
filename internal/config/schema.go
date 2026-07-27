@@ -31,6 +31,9 @@ type BarSettings struct {
 	EnableEllipsis   *bool    `yaml:"enable_ellipsis"`
 	Ellipsis         string   `yaml:"ellipsis"`
 	Strict           bool     `yaml:"strict"`
+	// ShrinkMin is the floor, in columns, that an elastic placeholder
+	// ({title~}) is never shrunk below.
+	ShrinkMin int `yaml:"shrink_min"`
 	// Defaults toggles the shipped module-defaults layer bar-wide
 	// (default true); entries can override with their own `defaults:`.
 	Defaults *bool `yaml:"defaults"`
@@ -47,9 +50,15 @@ func (b *BarSettings) fillDefaults() {
 	if b.Ellipsis == "" {
 		b.Ellipsis = "…"
 	}
+	if b.ShrinkMin == 0 {
+		b.ShrinkMin = 3
+	}
 }
 
 func (b *BarSettings) validate(n *yaml.Node, issues *Issues) {
+	if b.ShrinkMin < 1 {
+		issues.add("bar.shrink_min", n, "must be at least 1 column, got %d", b.ShrinkMin)
+	}
 	if len(b.TruncatePriority) != 3 {
 		issues.add("bar.truncate_priority", n,
 			"exactly 3 anchors needed, %d provided", len(b.TruncatePriority))

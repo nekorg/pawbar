@@ -65,6 +65,7 @@ var (
 	useEllipsis   bool
 	ellipsisCells []cell
 	ellipsisWidth int
+	shrinkMin     int
 )
 
 type anchor int
@@ -87,6 +88,7 @@ func Init(w, h int, settings config.BarSettings) {
 	useEllipsis = settings.EnableEllipsis == nil || *settings.EnableEllipsis
 	ellipsisCells = textToCells(settings.Ellipsis, vaxis.Style{}, Hit{}, false, false)
 	ellipsisWidth = totalWidth(ellipsisCells)
+	shrinkMin = settings.ShrinkMin
 	// kitty can report mouse events at the very edge, one past width.
 	state = make([]cell, width+1)
 }

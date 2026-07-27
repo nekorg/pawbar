@@ -29,6 +29,7 @@ merged per-slot configuration for cascade debugging.
 
 ```yaml
 bar:
+  shrink_min: 3
   truncate_priority: [right, left, middle]
   enable_ellipsis: true
   ellipsis: "…"
@@ -36,6 +37,8 @@ bar:
   defaults: true
 ```
 
+- `shrink_min`: the floor, in columns, that an
+  [elastic placeholder](#elastic-text) is never shrunk below.
 - `truncate_priority`: which anchors keep their content when the bar
   overflows; earlier wins. Must list all three.
 - `enable_ellipsis` / `ellipsis`: mark truncation points.
@@ -142,13 +145,53 @@ errors, so typos are caught at load time.
 - Time values take a strftime layout: `{time:%A %d %B}`.
 - Numbers take a printf spec without the `%`: `{vol:3}` pads to 3,
   `{load:.2f}` renders two decimals.
+- `~` marks a value as [elastic](#elastic-text): `{title~}`.
 - <code>&#123;&#123;</code> and <code>&#125;&#125;</code> are literal braces.
 
 Each module's placeholders are listed in the [module reference](/docs/modules).
 
 Power users can set `template` instead: a Go `text/template` over the
-same values (<code>&#123;&#123;.vol&#125;&#125;</code>), with `round` and `strftime` helper functions.
-`format` and `template` are mutually exclusive per block.
+same values (<code>&#123;&#123;.vol&#125;&#125;</code>), with `round`, `strftime` and `shrink` helper
+functions. `format` and `template` are mutually exclusive per block.
+
+## Elastic text
+
+When the bar runs out of room something has to give, and by default it is
+whatever happens to sit at the end being trimmed away — which is rarely
+what you want. Mark the parts that *should* give way with `~`:
+
+```yaml
+- mpris:
+    format: "{icon} {title~} • {artists~}"
+```
+
+Now the icon and the `•` are untouchable, and the title and artist shrink
+instead. They shrink *fairly*: the longer one gives way until the two are
+the same length, then they shorten together. Weights bias that split —
+`{title~2} • {artists~1}` keeps twice as many columns for the title.
+
+The floor is `bar.shrink_min` columns; nothing shrinks past it, and a
+specifier still applies (`{title~2:.60s}`).
+
+Each anchor is fitted into the room its position actually leaves it, in
+`bar.truncate_priority` order: the anchor listed first keeps its content,
+and the ones after it shrink into what remains. Note that a middle module
+is *centered*, so it splits the bar in half — with a clock in the middle,
+the right side can only use the columns past it, however empty the left
+half is.
+
+If shrinking alone cannot close the gap, the bar falls back to trimming
+whole blocks by `bar.truncate_priority` as before.
+
+In a `template`, wrap the value in `shrink` instead:
+
+```yaml
+template: '{{shrink .title}} • {{shrink 2 .artists}}'
+```
+
+`shrink` marks its output, so a pipeline stage that rewrites that output
+(`{{shrink .title | printf "%q"}}`) loses the marking and the value becomes
+ordinary rigid text. Appending after it is fine.
 
 ## States
 

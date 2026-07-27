@@ -307,8 +307,8 @@ Shipped defaults:
 ```yaml
 format: "󰫔"
 states:
-  playing: { format: " {title:.40s} • {artists:.20s}" }
-  paused: { format: " {title:.40s} • {artists:.20s}" }
+  playing: { format: " {title~} • {artists~}" }
+  paused: { format: " {title~} • {artists~}" }
 cursor: pointer
 on:
   left: play-pause
@@ -432,7 +432,7 @@ Focused window title (hyprland, i3/sway).
 Shipped defaults:
 
 ```yaml
-format: "{title}"
+format: "{title~}"
 states:
   class: { format: " {class} ", fg: "@black", bg: "@cool" }
 ```
