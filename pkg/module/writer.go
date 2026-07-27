@@ -22,6 +22,11 @@ type Segment struct {
 	Region string
 	Shape  vaxis.MouseShape
 
+	// Shrink > 0 makes this segment elastic: the layout shortens it (in
+	// proportion to the weight, fairly against the other elastic segments
+	// on the bar) before it truncates anything rigid. See format.Part.
+	Shrink int
+
 	// Image, when non-nil, makes this an icon segment: the runtime draws it
 	// as a Kitty graphic spanning Cells columns instead of drawing Text.
 	// ImageKey identifies the image for caching across frames — it must be
@@ -49,8 +54,16 @@ type StyleResolver func(extraStates []string) Resolved
 // Render call; it is not safe for use outside that call.
 type Writer struct {
 	resolve StyleResolver
-	segs    []Segment
+	ops     []op
 	err     error
+}
+
+// op is one recorded emission, held at every detail level its formatter
+// offers. Raw and Icon have a single level and repeat unchanged; a Text op
+// with a format ladder has one entry per rung. A level past the end reuses
+// the last, so modules with different ladder depths compose.
+type op struct {
+	levels [][]Segment
 }
 
 // NewWriter builds a Writer around a style resolver. Runtime use.
@@ -93,18 +106,30 @@ func (w *Writer) Text(data P, opts ...SegOpt) {
 		w.fail(fmt.Errorf("no format configured"), o, r)
 		return
 	}
-	s, err := r.Formatter.Render(data)
-	if err != nil {
-		w.fail(err, o, r)
-		return
+	levels := make([][]Segment, 0, r.Formatter.Levels())
+	for l := range r.Formatter.Levels() {
+		parts, err := r.Formatter.RenderParts(l, data)
+		if err != nil {
+			w.fail(err, o, r)
+			return
+		}
+		// One segment per part, so the layout can shrink the elastic ones
+		// without disturbing the rigid text around them.
+		var segs []Segment
+		for _, p := range parts {
+			if seg, ok := w.segment(p.Text, p.Shrink, o, r); ok {
+				segs = append(segs, seg)
+			}
+		}
+		levels = append(levels, segs)
 	}
-	w.emit(s, o, r)
+	w.ops = append(w.ops, op{levels: levels})
 }
 
-// Raw emits literal text as one segment, still styled by the cascade.
+// Raw emits literal text as one rigid segment, still styled by the cascade.
 func (w *Writer) Raw(s string, opts ...SegOpt) {
 	o := applyOpts(opts)
-	w.emit(s, o, w.resolve(o.states))
+	w.emit(s, 0, o, w.resolve(o.states))
 }
 
 // Icon emits an image segment: the runtime draws img as a Kitty graphic
@@ -123,7 +148,7 @@ func (w *Writer) Icon(img image.Image, key string, cells int, opts ...SegOpt) {
 	if o.cursor != nil {
 		shape = o.cursor.Go()
 	}
-	w.segs = append(w.segs, Segment{
+	w.fixed(Segment{
 		Style:    r.Style,
 		Region:   o.region,
 		Shape:    shape,
@@ -133,8 +158,25 @@ func (w *Writer) Icon(img image.Image, key string, cells int, opts ...SegOpt) {
 	})
 }
 
-// Segments returns everything written. Runtime use.
-func (w *Writer) Segments() []Segment { return w.segs }
+// Levels returns the module's output at each detail level, widest first.
+// There is always at least one. Runtime use.
+func (w *Writer) Levels() [][]Segment {
+	n := 1
+	for _, o := range w.ops {
+		n = max(n, len(o.levels))
+	}
+	out := make([][]Segment, n)
+	for l := range n {
+		for _, o := range w.ops {
+			// An op with a shallower ladder holds at its last level.
+			out[l] = append(out[l], o.levels[min(l, len(o.levels)-1)]...)
+		}
+	}
+	return out
+}
+
+// Segments returns the widest level. Runtime use.
+func (w *Writer) Segments() []Segment { return w.Levels()[0] }
 
 // Err returns the first formatting error hit during this render, if any.
 func (w *Writer) Err() error { return w.err }
@@ -147,25 +189,38 @@ func applyOpts(opts []SegOpt) segOpts {
 	return o
 }
 
-func (w *Writer) emit(text string, o segOpts, r Resolved) {
+// segment builds one text segment; empty text emits nothing.
+func (w *Writer) segment(text string, shrink int, o segOpts, r Resolved) (Segment, bool) {
 	if text == "" {
-		return
+		return Segment{}, false
 	}
 	shape := r.Shape
 	if o.cursor != nil {
 		shape = o.cursor.Go()
 	}
-	w.segs = append(w.segs, Segment{
+	return Segment{
 		Text:   text,
 		Style:  r.Style,
 		Region: o.region,
 		Shape:  shape,
-	})
+		Shrink: shrink,
+	}, true
+}
+
+// fixed records a segment that is the same at every detail level.
+func (w *Writer) fixed(seg Segment) {
+	w.ops = append(w.ops, op{levels: [][]Segment{{seg}}})
+}
+
+func (w *Writer) emit(text string, shrink int, o segOpts, r Resolved) {
+	if seg, ok := w.segment(text, shrink, o, r); ok {
+		w.fixed(seg)
+	}
 }
 
 func (w *Writer) fail(err error, o segOpts, r Resolved) {
 	if w.err == nil {
 		w.err = err
 	}
-	w.emit("‹fmt›", o, r)
+	w.emit("‹fmt›", 0, o, r)
 }
