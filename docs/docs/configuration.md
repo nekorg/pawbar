@@ -42,7 +42,7 @@ bar:
   spell one out between every pair. Empty (the default) keeps modules flush.
   Automatic gaps are layout rather than modules: they are never added at a
   side's edge, never next to an explicit [`gap` entry](#separators-and-gaps),
-  and they take `theme.defaults` styling — for anything else, write the join
+  and they take `theme.defaults` styling; for anything else, write the join
   out.
 - `shrink_min`: the floor, in columns, that an
   [elastic placeholder](#elastic-text) is never shrunk below.
@@ -76,7 +76,7 @@ theme:
 # Modules
 
 Each side is a list. An entry is a bare name, a `name: {options}` mapping,
-or `name: "text"` — a scalar is shorthand for setting just `format`:
+or `name: "text"`: a scalar is shorthand for setting just `format`:
 
 ```yaml
 left:
@@ -112,7 +112,7 @@ replaces the old `sep` and `space` modules: write `- gap: " │ "` and
 
 A module that has nothing to show (mpris with no player, tray with no
 icons) takes up no room, and a separator left facing only empty modules is
-dropped with it — so you never get a stranded `│` floating at the end of a
+dropped with it, so you never get a stranded `│` floating at the end of a
 side. A separator at the very edge of a side is kept: it divides that side
 from the rest of the bar rather than from a neighbour.
 
@@ -193,7 +193,7 @@ functions. `format` and `template` are mutually exclusive per block.
 ## Elastic text
 
 When the bar runs out of room something has to give, and by default it is
-whatever happens to sit at the end being trimmed away — which is rarely
+whatever happens to sit at the end being trimmed away, which is rarely
 what you want. Mark the parts that *should* give way with `~`:
 
 ```yaml
@@ -203,7 +203,7 @@ what you want. Mark the parts that *should* give way with `~`:
 
 Now the icon and the `•` are untouchable, and the title and artist shrink
 instead. They shrink *fairly*: the longer one gives way until the two are
-the same length, then they shorten together. Weights bias that split —
+the same length, then they shorten together. Weights bias that split:
 `{title~2} • {artists~1}` keeps twice as many columns for the title.
 
 The floor is `bar.shrink_min` columns; nothing shrinks past it, and a
@@ -212,7 +212,7 @@ specifier still applies (`{title~2:.60s}`).
 Each anchor is fitted into the room its position actually leaves it, in
 `bar.truncate_priority` order: the anchor listed first keeps its content,
 and the ones after it shrink into what remains. Note that a middle module
-is *centered*, so it splits the bar in half — with a clock in the middle,
+is *centered*, so it splits the bar in half: with a clock in the middle,
 the right side can only use the columns past it, however empty the left
 half is.
 
@@ -234,7 +234,7 @@ fine.
 ## Compact formats
 
 Shrinking only makes text shorter. When a module would rather *drop* part
-of itself than have everything squeezed, give `format` a list — widest
+of itself than have everything squeezed, give `format` a list, widest
 first:
 
 ```yaml
