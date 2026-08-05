@@ -70,7 +70,7 @@ func spawnHostPanel() (*katnip.Panel, error) {
 		StartAsHidden:  true,
 		KittyOverrides: kittyOverrides,
 	}
-	if mon, ok := monitor(); ok {
+	if mon, ok := output(); ok {
 		cfg.OutputName = mon.Name
 		if mon.ScaledWidth > 0 {
 			cfg.Position.X = mon.ScaledWidth + offScreenMargin

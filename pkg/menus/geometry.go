@@ -9,10 +9,10 @@ package menus
 import (
 	"math"
 	"sync"
-	"time"
 
 	"github.com/codelif/outputs"
 	"github.com/nekorg/pawbar/internal/logging"
+	"github.com/nekorg/pawbar/internal/monitor"
 	"github.com/nekorg/pawbar/internal/scale"
 	"github.com/nekorg/pawbar/pkg/menus/wire"
 )
@@ -62,37 +62,10 @@ func cellMetrics() (float64, float64) {
 	return 8 * f, 17 * f
 }
 
-var monCache struct {
-	mu   sync.Mutex
-	mon  outputs.Monitor
-	ok   bool
-	when time.Time
-}
-
-// monitor returns the output menus are placed on: the primary monitor,
-// like scale.Factor assumes. Cached briefly so rapid toggles don't
-// re-query the compositor.
-func monitor() (outputs.Monitor, bool) {
-	monCache.mu.Lock()
-	defer monCache.mu.Unlock()
-	if monCache.ok && time.Since(monCache.when) < 3*time.Second {
-		return monCache.mon, true
-	}
-	monitors, err := outputs.GetMonitors()
-	if err != nil || len(monitors) == 0 {
-		logging.Log.Warn().Msgf("menus: monitor query failed (%v); clamping disabled", err)
-		return outputs.Monitor{}, false
-	}
-	m := monitors[0]
-	for _, mon := range monitors {
-		if mon.IsPrimary {
-			m = mon
-			break
-		}
-	}
-	monCache.mon, monCache.ok, monCache.when = m, true, time.Now()
-	return m, true
-}
+// output returns the monitor menus are placed on: the one this bar runs
+// on, so a menu opens on the screen it was clicked from and is clamped to
+// that screen's geometry.
+func output() (outputs.Monitor, bool) { return monitor.Info() }
 
 // cellsToLogical converts a size in cells to compositor-logical units.
 // This is the panel's real footprint; clamping adds panelPad on top,
@@ -110,7 +83,7 @@ func clampRoot(at Anchor, wCells, hCells int) (int, int, wire.Geometry) {
 	ppcX, ppcY := cellMetrics()
 
 	geo := wire.Geometry{PPCX: ppcX, PPCY: ppcY, Scale: f, Pad: panelPad}
-	mon, ok := monitor()
+	mon, ok := output()
 	if ok {
 		geo.MonW, geo.MonH = mon.ScaledWidth, mon.ScaledHeight
 		w := cellsToLogical(wCells, ppcX, f) + 2*panelPad

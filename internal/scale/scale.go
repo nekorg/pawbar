@@ -6,44 +6,15 @@
 
 // Package scale converts physical pixel coordinates (as reported by
 // SGR-pixels mouse events) into the logical coordinates katnip panels
-// are positioned with, using the primary monitor's scale.
+// are positioned with, using the scale of the monitor this bar is on.
 package scale
 
-import (
-	"sync"
+import "github.com/nekorg/pawbar/internal/monitor"
 
-	"github.com/codelif/outputs"
-	"github.com/nekorg/pawbar/internal/logging"
-)
-
-var (
-	once sync.Once
-	// factor falls back to the historical assumption of a 2x display
-	// when the monitor query fails.
-	factor = 2.0
-)
-
-// Factor returns the primary monitor's scale, queried once per process.
-func Factor() float64 {
-	once.Do(func() {
-		monitors, err := outputs.GetMonitors()
-		if err != nil || len(monitors) == 0 {
-			logging.Log.Warn().Msgf("scale: monitor query failed (%v); assuming 2x", err)
-			return
-		}
-		m := monitors[0]
-		for _, mon := range monitors {
-			if mon.IsPrimary {
-				m = mon
-				break
-			}
-		}
-		if m.Scale > 0 {
-			factor = m.Scale
-		}
-	})
-	return factor
-}
+// Factor returns this bar's monitor scale. It is not cached here: mixed
+// DPI setups get a different answer per bar, and a mode switch changes it
+// under a running one — monitor.Info does the caching and invalidation.
+func Factor() float64 { return monitor.Scale() }
 
 // Logical converts physical pixel coordinates to logical ones.
 func Logical(x, y int) (int, int) {
