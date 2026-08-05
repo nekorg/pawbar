@@ -38,6 +38,8 @@ pawbar
 ```
 
 
+One `pawbar` covers the whole desktop: it puts a bar on every monitor, pinned to it, and follows monitor hotplug. Restrict it with `bar.outputs` (or `pawbar --output NAME`), and tailor a single screen's bar under a top-level `outputs:` section.
+
 You can add modules by editing `$HOME/.config/pawbar/pawbar.yaml`. The config is hot-reloaded, so the bar updates as you save. Validate it any time with `pawbar --check`. See [docs/examples/pawbar.yaml](docs/examples/pawbar.yaml) for a starting point and the docs for the full schema (theme variables, per-state styling, format placeholders and mouse bindings).
 
 It has 18 modules (all customisable upto a certain extent,for now):
@@ -58,7 +60,7 @@ It has 18 modules (all customisable upto a certain extent,for now):
  - `tray`: tray using nm-applet (with menu)
  - `volume`: A Volume level indicator (interactable)
  - `wifi`: A simple wifi conenction indicator (without menu, interatable on clicks)
- - `ws`: A dynamic workspace switcher (hyprland/i3/sway) with (with mouse events) (change workspace on click)
+ - `ws`: A dynamic workspace switcher (hyprland/i3/sway) with (with mouse events) (change workspace on click), showing its own monitor's workspaces
 
  - `gap`: The punctuation between modules: a space by default, `- gap: ""` to
    join two modules flush, `- gap: " │ "` for a divider. `bar.gap` sets the

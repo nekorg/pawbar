@@ -7,6 +7,7 @@ bar:
   truncate_priority: [right, left, middle]
   ellipsis: "…"
   # strict: true          # fail hard on any config error (also: pawbar --strict)
+  outputs: all            # a bar on every monitor; or [eDP-1, HDMI-A-1]
 
 theme:
   vars:
@@ -39,3 +40,16 @@ right:
       on:
         left: { cycle: [full] }
         right: { run: "gnome-calendar" }
+
+# Per-monitor overrides. Keys are output names (hyprctl monitors,
+# swaymsg -t get_outputs); each takes the same shape as the document
+# above. Sides are replaced, bar and theme merge key by key.
+#
+# outputs:
+#   HDMI-A-1:
+#     left:
+#       - ws:
+#           monitor: all      # this bar lists every workspace
+#     right:
+#       - clock:
+#           format: "{time:%H:%M}"

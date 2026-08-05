@@ -8,7 +8,7 @@ next:
 pawbar reads `~/.config/pawbar/pawbar.yaml` (override with `PAWBAR_CONFIG` or
 `--config`). The file is hot-reloaded: save it and the bar updates in place.
 
-A config has five top-level sections, all optional:
+A config has six top-level sections, all optional:
 
 ```yaml
 bar:      # bar-global settings
@@ -16,6 +16,7 @@ theme:    # variables and bar-wide default styling
 left:     # modules anchored left
 middle:   # modules centered
 right:    # modules anchored right
+outputs:  # per-monitor overrides of everything above
 ```
 
 Every problem in the config is reported with its file position and a
@@ -36,6 +37,7 @@ bar:
   ellipsis: "…"
   strict: false
   defaults: true
+  outputs: all
 ```
 
 - `gap`: inserted between adjacent modules on a side, so you don't have to
@@ -52,6 +54,7 @@ bar:
 - `strict`: any config issue aborts startup (and rejects hot reloads).
 - `defaults`: set `false` to drop every module's
   [shipped defaults](#shipped-defaults) bar-wide.
+- `outputs`: which monitors get a bar. See [Monitors](#monitors).
 
 # `theme`
 
@@ -72,6 +75,64 @@ theme:
   vars don't shadow them.
 - `defaults`: a [block](#blocks-style--format) applied to every module,
   plus per-state blocks under `states:`.
+
+# Monitors
+
+One `pawbar` runs the whole desktop: it starts a bar on every monitor,
+pinned to it, and keeps them in step with the compositor. Plug a monitor
+in and its bar appears; unplug it and the bar goes away and comes back
+with the monitor. You never run pawbar twice — a second one refuses to
+start, because it would stack a duplicate bar on every screen.
+
+Pick which monitors get a bar with `bar.outputs`:
+
+```yaml
+bar:
+  outputs: all            # every monitor (the default)
+  # outputs: eDP-1        # just the laptop screen
+  # outputs: [eDP-1, HDMI-A-1]
+  # outputs: none         # no bars at all
+```
+
+Names are the compositor's output names (`hyprctl monitors`,
+`swaymsg -t get_outputs`, `wlr-randr`). Naming a monitor that is not
+plugged in is not an error: its bar appears when it does. `pawbar
+--output NAME` overrides the selection for one run, and can be repeated.
+
+## Per-output overrides
+
+The top-level `outputs:` section tailors the bar on one monitor. Each
+entry takes the same keys as the root document, applied over it:
+
+```yaml
+bar:
+  gap: " "
+left:  [ws, title]
+right: [volume, clock]
+
+outputs:
+  HDMI-A-1:
+    bar: { gap: "  " }    # merged key by key over the base bar
+    right: [clock]        # replaces the base list entirely
+    middle:               # named with nothing under it: empty this side
+```
+
+- `left`, `middle`, `right`: **replaced** when the section mentions them.
+  A list cannot be merged predictably, so an override is the whole side;
+  mentioning a side with nothing under it clears it.
+- `bar` and `theme`: merged key by key, so an override only says what
+  differs. `theme.vars` are merged too, and `theme.defaults` merges per
+  key (a state block replaces that state, not the whole `states:` map).
+
+Everything else works as usual: issues are reported with their position,
+`pawbar --check` validates every output's section, and
+`pawbar --resolved --output HDMI-A-1` prints that monitor's fully merged
+configuration.
+
+Modules that mean something different per screen follow the monitor their
+bar is on: [`ws`](/docs/modules#ws) shows that monitor's workspaces and
+[`title`](/docs/modules#title) the window it is showing. Menus open on
+the monitor they were clicked from, at that monitor's scale.
 
 # Modules
 
