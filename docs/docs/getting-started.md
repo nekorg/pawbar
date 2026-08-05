@@ -13,6 +13,10 @@ The following dependencies are required at compile time:
  - `udev`
  - `librsvg`
 
+At runtime, external-monitor brightness additionally needs the `i2c-dev`
+kernel module and access to `/dev/i2c-*`; see the
+[`backlight` module](/docs/modules#permissions) for the setup.
+
 
 Clone and compile `pawbar`
 ```sh

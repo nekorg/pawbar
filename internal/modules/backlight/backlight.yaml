@@ -1,5 +1,9 @@
 format: "{icon} {light}%"
 icons: ["󰃞", "󰃟", "󰃝", "󰃠"]
+backend: auto
+monitor: self
+step: 5
+poll: 10s
 on:
-  scroll-up: { run: "brightnessctl set +5%" }
-  scroll-down: { run: "brightnessctl set 5%-" }
+  scroll-up: brightness-up
+  scroll-down: brightness-down

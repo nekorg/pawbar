@@ -22,21 +22,30 @@ name behaves exactly as if you pasted it. Print it any time with
 
 ## `backlight`
 
-Screen brightness via sysfs and udev.
+Screen brightness: sysfs and logind for internal panels, DDC/CI over I2C for
+external monitors.
 
 Shipped defaults:
 
 ```yaml
 format: "{icon} {light}%"
 icons: ["󰃞", "󰃟", "󰃝", "󰃠"]
+backend: auto
+monitor: self
+step: 5
+poll: 10s
 on:
-  scroll-up: { run: "brightnessctl set +5%" }
-  scroll-down: { run: "brightnessctl set 5%-" }
+  scroll-up: brightness-up
+  scroll-down: brightness-down
 ```
 
 | Option | Default | Description |
 |---|---|---|
 | `icons` | `["󰃞", "󰃟", "󰃝", "󰃠"]` | icon ramp, picked by brightness level |
+| `backend` | `auto` | `auto`, `sysfs` or `ddc` |
+| `monitor` | `self` | which output to control: `self` (the one this bar is on) or a connector name like `DP-1` |
+| `step` | `5` | percentage step for `brightness-up`/`brightness-down` |
+| `poll` | `10s` | how often to re-read a DDC monitor; `0s` disables it |
 
 | Placeholder | Description |
 |---|---|
@@ -44,6 +53,93 @@ on:
 | `{light}` | brightness percentage |
 | `{now}` | raw brightness value |
 | `{max}` | raw maximum brightness |
+| `{backend}` | resolved backend, `sysfs` or `ddc` |
+
+| Verb | Effect |
+|---|---|
+| `brightness-up` | raise by `step` (shipped: `scroll-up`) |
+| `brightness-down` | lower by `step` (shipped: `scroll-down`) |
+| `set-brightness` | set to the percentage given as an argument, e.g. `{ middle: set-brightness 100 }` |
+
+### Choosing a backend
+
+`auto` decides per monitor, and gets it right on ordinary hardware without
+any configuration:
+
+1. If the kernel says a backlight device drives this bar's output, use it.
+   Laptop panels take this path.
+2. Otherwise, if the output is connected and reachable over DDC/CI, use that.
+   External monitors take this path.
+3. Otherwise fall back to whatever backlight device exists.
+
+Step 1 comes first on purpose. A laptop panel usually exposes an I2C channel
+too — its DisplayPort AUX line — and talking DDC/CI to it does nothing good,
+so an attached backlight device always wins.
+
+Set `backend` explicitly to skip the guessing: `sysfs` never touches I2C, and
+`ddc` fails loudly rather than falling back. To vary it per monitor, put the
+entry under a top-level `outputs:` section:
+
+```yaml
+outputs:
+  DP-1:
+    right: [{ backlight: { backend: ddc } }, clock]
+```
+
+`backend`, `monitor` and `poll` are settled when the module starts; overriding
+them from a `states:` block has no effect. The rest are live.
+
+A monitor changed with its own OSD buttons announces nothing, so `poll` is how
+that gets noticed. Internal panels do emit udev events and ignore `poll`.
+
+### Permissions
+
+Internal panels need no setup. pawbar asks logind to write the brightness,
+which any active session may do — no group, no udev rule, no polkit prompt.
+On a system without logind it writes `/sys/class/backlight/*/brightness`
+directly, which needs membership in `video`, and falls back to `brightnessctl`
+if that is installed.
+
+DDC/CI is the part that needs permissions, because it means reading and
+writing `/dev/i2c-*`.
+
+1. Load the kernel module:
+
+   ```sh
+   sudo modprobe i2c-dev
+   echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf
+   ```
+
+2. Grant access, either way:
+
+   - **Easiest — install `ddcutil` (2.0 or newer).** Its udev rules tag
+     display I2C devices with `uaccess`, so the logged-in user gets an ACL
+     automatically, with no group to join and no logout. Check it took with
+     `getfacl /dev/i2c-*`.
+   - **Manual.** Create the group, join it, and add a rule:
+
+     ```sh
+     sudo groupadd -f i2c
+     sudo usermod -aG i2c $USER
+     echo 'KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"' \
+       | sudo tee /etc/udev/rules.d/45-pawbar-i2c.rules
+     sudo udevadm control --reload && sudo udevadm trigger
+     ```
+
+     Then log out and back in, so your session picks up the new group.
+
+3. Confirm your monitors answer: `ddcutil detect`.
+
+**Optional: install `ddcutil-service`.** pawbar prefers it when it is
+present. It is a resident D-Bus service, so pawbar never spawns a process to
+change brightness, and it carries libddcutil's quirk handling for monitors
+that bend the spec. It runs as your user, so it does not replace the
+`/dev/i2c-*` access above. Without it pawbar speaks DDC/CI on the bus itself.
+
+**Nvidia's proprietary driver** often fails at DDC/CI, and the I2C buses it
+exposes are frequently not the DDC channels at all. If `ddcutil detect` finds
+nothing, `auto` will quietly fall back to sysfs; `backend: sysfs` skips the
+probe entirely.
 
 ## `battery`
 
