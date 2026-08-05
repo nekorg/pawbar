@@ -1,3 +1,4 @@
 format: "{title~}"
+monitor: self
 states:
   class: { format: " {class} ", fg: "@black", bg: "@cool" }

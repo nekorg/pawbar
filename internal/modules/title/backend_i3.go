@@ -20,18 +20,23 @@ type i3Backend struct {
 	done chan struct{}
 	sig  chan struct{}
 
+	// self is the output this bar is on; "" follows the focused window
+	// wherever it is.
+	self string
+
 	mu       sync.RWMutex
 	instance string
 	title    string
 }
 
-func newI3Backend(s *i3.Service) backend {
+func newI3Backend(s *i3.Service, self string) backend {
 	b := &i3Backend{
 		svc:  s,
 		ev:   make(chan interface{}, 32),
 		ev2:  make(chan interface{}, 32),
 		done: make(chan struct{}),
 		sig:  make(chan struct{}, 2),
+		self: self,
 	}
 
 	b.refresh()
@@ -45,6 +50,9 @@ func newI3Backend(s *i3.Service) backend {
 
 func (b *i3Backend) refresh() {
 	instance, title := i3.GetTitleClass()
+	if b.self != "" {
+		instance, title = i3.GetTitleClassOn(b.self)
+	}
 	b.mu.Lock()
 	b.instance, b.title = instance, title
 	b.mu.Unlock()

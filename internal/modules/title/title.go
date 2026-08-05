@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/nekorg/pawbar/internal/monitor"
 	"github.com/nekorg/pawbar/internal/services"
 	"github.com/nekorg/pawbar/internal/services/hypr"
 	"github.com/nekorg/pawbar/internal/services/i3"
@@ -27,6 +28,12 @@ type backend interface {
 	Close()
 }
 
+// Monitor selection values for the `monitor` option.
+const (
+	monitorSelf    = "self"
+	monitorFocused = "focused"
+)
+
 type titleModule struct {
 	b       backend
 	release func()
@@ -34,7 +41,13 @@ type titleModule struct {
 }
 
 func (m *titleModule) Init(ctx *module.Ctx) error {
-	if err := m.selectBackend(); err != nil {
+	// The backend is wired to one monitor for its lifetime; a bar that
+	// moved to another output is a new panel process anyway.
+	self := monitor.Self()
+	if o, ok := ctx.Options().(*Options); ok && o.Monitor == monitorFocused {
+		self = ""
+	}
+	if err := m.selectBackend(self); err != nil {
 		return err
 	}
 	m.win = m.b.Window()
@@ -64,7 +77,9 @@ func (m *titleModule) source() module.Source[Window] {
 	})
 }
 
-func (m *titleModule) selectBackend() error {
+// selectBackend picks the compositor backend. self is the output the
+// module follows, "" for whichever monitor has focus.
+func (m *titleModule) selectBackend(self string) error {
 	switch {
 	case os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "":
 		svc, release, err := services.Acquire("hypr", func() (*hypr.Service, error) {
@@ -77,7 +92,7 @@ func (m *titleModule) selectBackend() error {
 		if err != nil {
 			return fmt.Errorf("hypr service: %w", err)
 		}
-		m.b, m.release = newHyprBackend(svc), release
+		m.b, m.release = newHyprBackend(svc, self), release
 
 	case os.Getenv("I3SOCK") != "" || os.Getenv("SWAYSOCK") != "":
 		svc, release, err := services.Acquire("i3", func() (*i3.Service, error) {
@@ -90,7 +105,7 @@ func (m *titleModule) selectBackend() error {
 		if err != nil {
 			return fmt.Errorf("i3 service: %w", err)
 		}
-		m.b, m.release = newI3Backend(svc), release
+		m.b, m.release = newI3Backend(svc, self), release
 
 	default:
 		return fmt.Errorf("no window backend for current environment")
