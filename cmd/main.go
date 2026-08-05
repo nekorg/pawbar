@@ -13,12 +13,15 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"slices"
+	"strings"
 
 	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/internal/core"
 	"github.com/nekorg/pawbar/internal/logging"
 	_ "github.com/nekorg/pawbar/internal/modules/builtin"
+	"github.com/nekorg/pawbar/internal/monitor"
 	"github.com/nekorg/pawbar/internal/tui"
 	"github.com/nekorg/pawbar/pkg/menus"
 	"github.com/nekorg/pawbar/pkg/module"
@@ -33,14 +36,18 @@ func init() {
 	menus.RegisterHost()
 }
 
-// Pawbar parses flags and launches the bar panel. The kitty child process
-// never reaches this function (katnip intercepts it at init), so settings
-// travel to the panel through PAWBAR_* environment variables.
+// Pawbar parses flags and supervises one bar panel per monitor. The kitty
+// child process never reaches this function (katnip intercepts it at
+// init), so settings travel to the panel through PAWBAR_* environment
+// variables — including PAWBAR_OUTPUT, which tells each panel process
+// which monitor it is on.
 func Pawbar() {
 	cfgFlag := flag.String("config", "", "config file `path` (default ~/.config/pawbar/pawbar.yaml)")
 	strictFlag := flag.Bool("strict", false, "refuse to start on any config issue")
 	checkFlag := flag.Bool("check", false, "validate the config and exit")
 	resolvedFlag := flag.Bool("resolved", false, "print the resolved per-slot configuration and exit")
+	var outputFlag outputList
+	flag.Var(&outputFlag, "output", "monitor(s) to put a bar on, overriding bar.outputs; repeatable, or `all`/`none`")
 	flag.Parse()
 
 	if *cfgFlag != "" {
@@ -53,7 +60,7 @@ func Pawbar() {
 		os.Exit(checkConfig())
 	}
 	if *resolvedFlag {
-		os.Exit(dumpResolved())
+		os.Exit(dumpResolved(outputFlag.one()))
 	}
 	if args := flag.Args(); len(args) > 0 {
 		if args[0] == "defaults" {
@@ -63,33 +70,112 @@ func Pawbar() {
 		os.Exit(2)
 	}
 
-	panel := katnip.NewPanel(
-		"pawbar",
-		katnip.Config{
-			Size:        katnip.Vector{X: 0, Y: 1},
-			FocusPolicy: katnip.FocusNotAllowed,
-			KittyOverrides: []string{
-				"font_size=12",
-				"cursor_trail=0",
-				"paste_actions=replace-dangerous-control-codes",
-				"map kitty_mod+equal  no_op",
-				"map kitty_mod+plus   no_op",
-				"map kitty_mod+kp_add no_op",
-				"map cmd+plus         no_op",
-				"map cmd+equal        no_op",
-				"map shift+cmd+equal  no_op",
-				"map kitty_mod+minus       no_op",
-				"map kitty_mod+kp_subtract no_op",
-				"map cmd+minus             no_op",
-				"map shift+cmd+minus       no_op",
-				"map kitty_mod+backspace no_op",
-				"map cmd+0               no_op",
-			},
-		},
-	)
+	os.Exit(supervise(outputFlag.sel()))
+}
 
-	go io.Copy(os.Stdout, panel.Reader())
-	panel.Run()
+// supervise runs the panel supervisor until a signal stops it.
+func supervise(flagSel *config.OutputSel) int {
+	lock, holder, err := acquireLock()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pawbar is already running")
+		if holder > 0 {
+			fmt.Fprintf(os.Stderr, " (pid %d)", holder)
+		}
+		fmt.Fprintf(os.Stderr, "\none pawbar puts a bar on every monitor; stop that one first\n(%v)\n", err)
+		return 1
+	}
+	defer lock.Close()
+
+	log := logging.Setup(os.Stderr)
+
+	sel := config.OutputSel{}
+	if flagSel != nil {
+		sel = *flagSel
+	} else {
+		f, issues := config.Read(configPath())
+		if issues.Fatal() {
+			// The panels report config problems in full; the supervisor
+			// only needs to know which monitors to cover.
+			log.Warn().Msg("config: unreadable, putting a bar on every monitor")
+		}
+		sel = f.Bar.Outputs
+	}
+	if sel.Empty() {
+		log.Error().Msg("no monitors selected (bar.outputs: none), nothing to do")
+		return 1
+	}
+	log.Info().Msgf("monitors: %s", sel)
+
+	return newSupervisor(log, sel, flagSel).run()
+}
+
+// barPanelConfig is the kitty panel every bar runs in, pinned to output.
+func barPanelConfig(output string) katnip.Config {
+	return katnip.Config{
+		Size:        katnip.Vector{X: 0, Y: 1},
+		FocusPolicy: katnip.FocusNotAllowed,
+		OutputName:  output,
+		KittyOverrides: []string{
+			"font_size=12",
+			"cursor_trail=0",
+			"paste_actions=replace-dangerous-control-codes",
+			"map kitty_mod+equal  no_op",
+			"map kitty_mod+plus   no_op",
+			"map kitty_mod+kp_add no_op",
+			"map cmd+plus         no_op",
+			"map cmd+equal        no_op",
+			"map shift+cmd+equal  no_op",
+			"map kitty_mod+minus       no_op",
+			"map kitty_mod+kp_subtract no_op",
+			"map cmd+minus             no_op",
+			"map shift+cmd+minus       no_op",
+			"map kitty_mod+backspace no_op",
+			"map cmd+0               no_op",
+		},
+	}
+}
+
+// outputList collects repeated (or comma-separated) --output flags.
+type outputList []string
+
+func (o *outputList) String() string { return strings.Join(*o, ",") }
+
+func (o *outputList) Set(v string) error {
+	for _, name := range strings.Split(v, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			*o = append(*o, name)
+		}
+	}
+	return nil
+}
+
+// sel turns the flag into an output selection, nil when unset so the
+// config decides.
+func (o outputList) sel() *config.OutputSel {
+	if len(o) == 0 {
+		return nil
+	}
+	s := &config.OutputSel{}
+	for _, name := range o {
+		switch name {
+		case "all":
+			return &config.OutputSel{All: true}
+		case "none":
+			return &config.OutputSel{}
+		default:
+			s.Names = append(s.Names, name)
+		}
+	}
+	return s
+}
+
+// one returns the single output named on the command line, for the
+// introspection commands that render one bar's configuration.
+func (o outputList) one() string {
+	if len(o) == 0 {
+		return ""
+	}
+	return o[0]
 }
 
 func configPath() string {
@@ -100,7 +186,8 @@ func configPath() string {
 }
 
 // checkConfig validates the config and reports every issue; exit status 1
-// when any exist.
+// when any exist. Every per-output section is compiled too: a bar that only
+// exists on the second monitor must still be checkable from the first.
 func checkConfig() int {
 	path := configPath()
 	f, issues := config.Read(path)
@@ -109,7 +196,21 @@ func checkConfig() int {
 	for _, issue := range issues {
 		fmt.Fprintf(os.Stderr, "%s:%s\n", path, issue.Error())
 	}
-	if len(issues) > 0 {
+	bad := len(issues) > 0
+
+	for _, name := range f.OutputNames() {
+		_, oi := config.Compile(f.For(name))
+		for _, issue := range oi {
+			// Issues from the shared base document were reported above.
+			if slices.ContainsFunc(ci, func(c config.Issue) bool { return c == issue }) {
+				continue
+			}
+			bad = true
+			fmt.Fprintf(os.Stderr, "%s:%s: %s\n", path, name, issue.Error())
+		}
+	}
+
+	if bad {
 		return 1
 	}
 	fmt.Printf("%s: OK\n", path)
@@ -120,9 +221,14 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	log := logging.Setup(rw)
 
 	strictEnv := os.Getenv("PAWBAR_STRICT") != ""
+	output := monitor.Self()
+	if output != "" {
+		log = log.With().Str("output", output).Logger()
+		logging.Log = log
+	}
 
 	f, issues := config.Read(configPath())
-	bar, compileIssues := config.Compile(f)
+	bar, compileIssues := config.Compile(f.For(output))
 	issues = append(issues, compileIssues...)
 	for _, issue := range issues {
 		log.Warn().Msgf("config: %s", issue.Error())
@@ -203,6 +309,9 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			switch ev := ev.(type) {
 			case vaxis.Resize:
 				menus.SetCellMetrics(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
+				// A resize is how a mode or scale change on this output
+				// reaches the bar; the cached geometry is now stale.
+				monitor.Invalidate()
 				fullResize()
 				log.Debug().Msgf("panel size: %d, %d", ev.XPixel, ev.YPixel)
 			case vaxis.Redraw:
@@ -264,7 +373,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 
 		case <-reloadCh:
 			nf, nIssues := config.Read(configPath())
-			newBar, ci := config.Compile(nf)
+			newBar, ci := config.Compile(nf.For(output))
 			nIssues = append(nIssues, ci...)
 			for _, issue := range nIssues {
 				log.Warn().Msgf("config: %s", issue.Error())

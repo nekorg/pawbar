@@ -49,10 +49,14 @@ func printDefaults(names []string) int {
 
 // dumpResolved implements `pawbar --resolved`: the user's config compiled
 // and flattened per slot, for debugging the cascade. States and hover are
-// not expanded; this shows the base layer each module starts from.
-func dumpResolved() int {
+// not expanded; this shows the base layer each module starts from. With
+// --output it resolves the bar as that monitor sees it.
+func dumpResolved(output string) int {
 	f, issues := config.Read(configPath())
-	bar, ci := config.Compile(f)
+	if output != "" && f.Outputs[output] == nil && len(f.Outputs) > 0 {
+		fmt.Fprintf(os.Stderr, "# %s has no outputs: section; showing the base configuration\n", output)
+	}
+	bar, ci := config.Compile(f.For(output))
 	issues = append(issues, ci...)
 	for _, issue := range issues {
 		fmt.Fprintf(os.Stderr, "%s\n", issue.Error())

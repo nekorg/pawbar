@@ -32,6 +32,8 @@ func canonicalSignalName(s os.Signal) string {
 		return "SIGTRAP"
 	case syscall.SIGABRT:
 		return "SIGABRT"
+	case syscall.SIGTERM:
+		return "SIGTERM"
 	case syscall.SIGBUS:
 		return "SIGBUS"
 	case syscall.SIGFPE:
