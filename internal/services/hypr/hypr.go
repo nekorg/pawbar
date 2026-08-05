@@ -217,6 +217,29 @@ type Workspace struct {
 	Lastwindowtitle string `json:"lastwindowtitle"`
 }
 
+// Monitor is one output as Hyprland sees it. Which workspace is on which
+// monitor, and which monitor has focus, only lives here: /workspaces says
+// where a workspace lives, /monitors says what is on screen.
+type Monitor struct {
+	ID               int      `json:"id"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	X                int      `json:"x"`
+	Y                int      `json:"y"`
+	ActiveWorkspace  ClientWS `json:"activeWorkspace"`
+	SpecialWorkspace ClientWS `json:"specialWorkspace"`
+	Focused          bool     `json:"focused"`
+	Disabled         bool     `json:"disabled"`
+}
+
+func GetMonitors() ([]Monitor, error) {
+	var o []Monitor
+	if err := request("-j/monitors", &o); err != nil {
+		return nil, err
+	}
+	return o, nil
+}
+
 type hyprVersion struct {
 	Version string `json:"version"`
 }
@@ -351,4 +374,19 @@ func GoToWorkspace(name string) error {
 		command = "/dispatch workspace " + name
 	}
 	return request(command, nil)
+}
+
+// FocusMonitor moves keyboard focus to a monitor by name. Switching to a
+// workspace implies focusing the monitor that owns it, but an empty or
+// persistent workspace has no monitor of its own until something focuses
+// one first.
+func FocusMonitor(name string) error {
+	return request("/dispatch focusmonitor "+name, nil)
+}
+
+// ToggleSpecialWorkspace opens or closes a special workspace on the
+// focused monitor. name is the part after "special:" ("" is the unnamed
+// special workspace).
+func ToggleSpecialWorkspace(name string) error {
+	return request("/dispatch togglespecialworkspace "+name, nil)
 }

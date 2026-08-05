@@ -18,9 +18,10 @@ type i3Backend struct {
 	svc  *i3.Service
 	ev   chan interface{}
 	done chan struct{}
-	ws   map[int]*Workspace
-	mu   sync.RWMutex
 	sig  chan struct{}
+
+	mu sync.RWMutex
+	ws []Workspace
 }
 
 func newI3Backend(s *i3.Service) backend {
@@ -28,11 +29,10 @@ func newI3Backend(s *i3.Service) backend {
 		svc:  s,
 		ev:   make(chan interface{}, 32),
 		done: make(chan struct{}),
-		ws:   make(map[int]*Workspace),
 		sig:  make(chan struct{}, 1),
 	}
 
-	b.refreshWorkspaceCache()
+	b.refresh()
 
 	b.svc.RegisterChannel("workspaces", b.ev)
 
@@ -54,7 +54,7 @@ func (b *i3Backend) loop() {
 		case e := <-b.ev:
 			if evt, ok := e.(i3.I3Event); ok {
 				logging.Log.Debug().Msgf("ws: i3: event type: %v", evt)
-				b.refreshWorkspaceCache()
+				b.refresh()
 				b.signal()
 			} else {
 				logging.Log.Debug().Msgf("ws: i3: unknown event type: %v", e)
@@ -63,24 +63,53 @@ func (b *i3Backend) loop() {
 	}
 }
 
-func (b *i3Backend) refreshWorkspaceCache() {
+// refresh rebuilds the workspace list. GET_WORKSPACES already answers
+// every question the bar has: which monitor a workspace is on, whether it
+// is on screen there, and which one has focus.
+func (b *i3Backend) refresh() {
 	workspaces, err := i3.GetWorkspaces()
 	if err != nil {
 		logging.Log.Warn().Msgf("ws: i3: workspaces query: %v; keeping cached list", err)
 		return
 	}
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.ws = make(map[int]*Workspace)
+	list := make([]Workspace, 0, len(workspaces))
 	for _, w := range workspaces {
-		b.ws[w.Id] = &Workspace{
-			ID:     w.Id,
-			Name:   w.Name,
-			Active: w.Focused,
-			Urgent: w.Urgent,
-		}
+		list = append(list, Workspace{
+			ID:      w.Id,
+			Name:    w.Name,
+			Monitor: w.Output,
+			Active:  w.Focused,
+			Visible: w.Visible,
+			Urgent:  w.Urgent,
+		})
 	}
+	sortI3(list)
+
+	b.mu.Lock()
+	b.ws = list
+	b.mu.Unlock()
+}
+
+// sortI3 orders workspaces the way i3bar does: numbered ones ascending,
+// then named ones alphabetically. Named workspaces all report num -1, so
+// they cannot be told apart by number.
+func sortI3(list []Workspace) {
+	sort.SliceStable(list, func(i, j int) bool {
+		a, b := list[i], list[j]
+		switch {
+		case a.ID < 0 && b.ID < 0:
+			return a.Name < b.Name
+		case a.ID < 0:
+			return false
+		case b.ID < 0:
+			return true
+		case a.ID != b.ID:
+			return a.ID < b.ID
+		default:
+			return a.Name < b.Name
+		}
+	})
 }
 
 func (b *i3Backend) signal() {
@@ -93,13 +122,47 @@ func (b *i3Backend) signal() {
 func (b *i3Backend) List() []Workspace {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-
-	ws := make([]Workspace, 0, len(b.ws))
-	for _, v := range b.ws {
-		ws = append(ws, Workspace{v.ID, v.Name, v.Active, v.Urgent, v.Special})
-	}
-	sort.Slice(ws, func(a, b int) bool { return ws[a].ID < ws[b].ID })
-	return ws
+	return append([]Workspace(nil), b.ws...)
 }
+
 func (b *i3Backend) Events() <-chan struct{} { return b.sig }
-func (b *i3Backend) Goto(name string)        { i3.GoToWorkspace(name) }
+
+// Region identifies a workspace in a click. i3/sway workspace names are
+// unique, and they are what the workspace command takes.
+func (b *i3Backend) Region(w Workspace) string { return w.Name }
+
+// Goto switches to the clicked workspace, focusing its output first when
+// that is a different one, so clicking the bar on the second screen moves
+// the user there even for an empty workspace.
+func (b *i3Backend) Goto(region string) {
+	if target, ok := b.find(region); ok && target.Monitor != "" && !b.outputFocused(target.Monitor) {
+		if err := i3.FocusOutput(target.Monitor); err != nil {
+			logging.Log.Warn().Msgf("ws: i3: focus output %q: %v", target.Monitor, err)
+		}
+	}
+	i3.GoToWorkspace(region)
+}
+
+func (b *i3Backend) find(region string) (Workspace, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, w := range b.ws {
+		if w.Name == region {
+			return w, true
+		}
+	}
+	return Workspace{}, false
+}
+
+// outputFocused reports whether name is the output with focus: the
+// focused workspace names it.
+func (b *i3Backend) outputFocused(name string) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, w := range b.ws {
+		if w.Active {
+			return w.Monitor == name
+		}
+	}
+	return false
+}

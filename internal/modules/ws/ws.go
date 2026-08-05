@@ -9,9 +9,9 @@ package ws
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"sync"
 
+	"github.com/nekorg/pawbar/internal/monitor"
 	"github.com/nekorg/pawbar/internal/services"
 	"github.com/nekorg/pawbar/internal/services/hypr"
 	"github.com/nekorg/pawbar/internal/services/i3"
@@ -19,9 +19,16 @@ import (
 )
 
 type Workspace struct {
-	ID      int
-	Name    string
+	ID   int
+	Name string
+	// Monitor is the output the workspace lives on, "" when the
+	// compositor does not say.
+	Monitor   string
+	MonitorID int
+	// Active is the workspace with input focus: one per session. Visible
+	// is a workspace on screen somewhere, which is one per monitor.
 	Active  bool
+	Visible bool
 	Urgent  bool
 	Special bool
 }
@@ -29,9 +36,18 @@ type Workspace struct {
 type backend interface {
 	List() []Workspace
 	Events() <-chan struct{}
-	Goto(name string)
+	// Region encodes a workspace's identity into the click region the
+	// module renders it with; Goto takes that encoding back.
+	Region(w Workspace) string
+	Goto(region string)
 	Close()
 }
+
+// Monitor selection values for the `monitor` option.
+const (
+	monitorSelf = "self"
+	monitorAll  = "all"
+)
 
 type wsModule struct {
 	b       backend
@@ -40,12 +56,18 @@ type wsModule struct {
 
 	list        []Workspace
 	currentOnly bool
+	// monitorOpt is the `monitor` option: "self", "all" or an output
+	// name. self is resolved against the output this bar runs on.
+	monitorOpt string
+	self       string
+	warnOnce   sync.Once
 }
 
 func (m *wsModule) Init(ctx *module.Ctx) error {
 	if err := m.selectBackend(); err != nil {
 		return err
 	}
+	m.self = monitor.Self()
 	m.list = m.b.List()
 	m.refreshOpts(ctx)
 
@@ -121,8 +143,16 @@ func (m *wsModule) selectBackend() error {
 }
 
 func (m *wsModule) refreshOpts(ctx *module.Ctx) {
-	if o, ok := ctx.Options().(*Options); ok {
-		m.currentOnly = o.CurrentOnly
+	o, ok := ctx.Options().(*Options)
+	if !ok {
+		return
+	}
+	m.currentOnly = o.CurrentOnly
+	m.monitorOpt = o.Monitor
+	if m.monitorOpt == monitorSelf && m.self == "" {
+		m.warnOnce.Do(func() {
+			ctx.Log("this bar is not pinned to a monitor; showing every workspace")
+		})
 	}
 }
 
@@ -139,30 +169,61 @@ func (m *wsModule) Stop(ctx *module.Ctx) {
 	}
 }
 
+// view filters the workspace list for one bar. Order comes from the
+// backend, which knows how its compositor numbers workspaces.
+//
+// mode is the `monitor` option: "all" shows every workspace, "self" only
+// this bar's monitor, and anything else is taken as an output name. A bar
+// that does not know its own output (not pinned, or a compositor that
+// does not report one) shows everything rather than nothing.
+func view(list []Workspace, mode, self string) []Workspace {
+	want := mode
+	switch mode {
+	case monitorAll, "":
+		return list
+	case monitorSelf:
+		if self == "" {
+			return list
+		}
+		want = self
+	}
+
+	out := make([]Workspace, 0, len(list))
+	for _, w := range list {
+		// A compositor that does not report the monitor would filter
+		// everything away; show those workspaces instead of hiding them.
+		if w.Monitor == want || w.Monitor == "" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 func (m *wsModule) Render(w *module.Writer) {
-	for _, ws := range m.list {
-		if m.currentOnly && !ws.Active {
+	for _, ws := range view(m.list, m.monitorOpt, m.self) {
+		// current_only keeps what is on screen: the focused workspace,
+		// and on any other monitor shown the one displayed there.
+		if m.currentOnly && !ws.Active && !ws.Visible {
 			continue
 		}
 		name := ws.Name
 		if ws.Special {
 			name = "S"
 		}
-		region := name
-		if m.bname == "hypr" {
-			region = strconv.Itoa(ws.ID)
-		}
 		var states []string
 		if ws.Urgent {
 			states = append(states, "urgent")
 		}
-		if ws.Active {
+		switch {
+		case ws.Active:
 			states = append(states, "active")
+		case ws.Visible:
+			states = append(states, "visible")
 		}
 		if ws.Special {
 			states = append(states, "special")
 		}
 		w.Text(module.P{"ws": name},
-			module.States(states...), module.Region(region))
+			module.States(states...), module.Region(m.b.Region(ws)))
 	}
 }

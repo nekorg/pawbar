@@ -1,9 +1,11 @@
 format: " {ws} "
 cursor: pointer
 current_only: false
+monitor: self
 states:
   urgent: { fg: "@black", bg: "@urgent" }
   active: { fg: "@black", bg: "@active" }
+  visible: { fg: "@active" }
   special: { fg: "@active", bg: "@special" }
 on:
   left: goto

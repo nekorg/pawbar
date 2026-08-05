@@ -16,14 +16,18 @@ import (
 var defaults []byte
 
 type Options struct {
-	// CurrentOnly renders only the focused workspace. Toggle it at
-	// runtime with a user state that overrides it, e.g.:
+	// CurrentOnly renders only what is on screen: the focused workspace,
+	// plus the displayed one on any other monitor being shown. Toggle it
+	// at runtime with a user state that overrides it, e.g.:
 	//
 	//	states:
 	//	  focus: { current_only: true }
 	//	on:
 	//	  right: { cycle: [focus] }
 	CurrentOnly bool `yaml:"current_only"`
+	// Monitor selects whose workspaces to show: "self" (the monitor this
+	// bar is on), "all", or an output name.
+	Monitor string `yaml:"monitor"`
 }
 
 func init() {
@@ -35,6 +39,7 @@ func init() {
 		States: []module.StateDef{
 			{Name: "urgent", Doc: "workspace has an urgent window (per segment)"},
 			{Name: "active", Doc: "the focused workspace (per segment)"},
+			{Name: "visible", Doc: "on screen on its monitor, but not focused (per segment)"},
 			{Name: "special", Doc: "a special/scratchpad workspace (per segment)"},
 		},
 		Placeholders: []module.Placeholder{

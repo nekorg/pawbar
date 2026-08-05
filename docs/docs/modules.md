@@ -443,16 +443,23 @@ Shipped defaults:
 
 ```yaml
 format: "{title~}"
+monitor: self
 states:
   class: { format: " {class} ", fg: "@black", bg: "@cool" }
 ```
 
-No options.
+| Option | Default | Description |
+|---|---|---|
+| `monitor` | `self` | which window to follow: `self` (the one this bar's monitor is showing) or `focused` (wherever focus is) |
 
 | Placeholder | Description |
 |---|---|
 | `{title}` | focused window title |
 | `{class}` | focused window class |
+
+With `monitor: self` each bar names the window on its own screen, so the
+title stays put when you move focus to the other monitor; `focused` makes
+every bar mirror the focused window, as pawbar did before.
 
 | State | Shipped styling | When |
 |---|---|---|
@@ -564,9 +571,11 @@ Shipped defaults:
 format: " {ws} "
 cursor: pointer
 current_only: false
+monitor: self
 states:
   urgent: { fg: "@black", bg: "@urgent" }
   active: { fg: "@black", bg: "@active" }
+  visible: { fg: "@active" }
   special: { fg: "@active", bg: "@special" }
 on:
   left: goto
@@ -574,7 +583,8 @@ on:
 
 | Option | Default | Description |
 |---|---|---|
-| `current_only` | `false` | render only the focused workspace |
+| `current_only` | `false` | render only what is on screen |
+| `monitor` | `self` | whose workspaces to show: `self`, `all`, or an output name |
 
 | Placeholder | Description |
 |---|---|
@@ -584,15 +594,39 @@ on:
 |---|---|---|
 | `urgent` | `fg: "@black", bg: "@urgent"` | workspace with an urgent window (applied per workspace segment) |
 | `active` | `fg: "@black", bg: "@active"` | the focused workspace (per segment) |
+| `visible` | `fg: "@active"` | on screen on its monitor, but without focus (per segment) |
 | `special` | `fg: "@active", bg: "@special"` | special/scratchpad workspace (per segment) |
 
 | Verb | Effect |
 |---|---|
 | `goto` | switch to the clicked workspace (shipped: `left`) |
 
+### Multiple monitors
+
+Each bar shows its own monitor's workspaces (`monitor: self`), which is
+what a single-monitor setup was doing all along. Set `monitor: all` to
+show every workspace on every bar, or name an output to pin a bar's list
+to it:
+
+```yaml
+- ws:
+    monitor: all
+```
+
+Exactly one workspace in the session is `active` — the one with keyboard
+focus. The workspace displayed on each *other* monitor is `visible`, so
+the bar on the screen you are not typing on still marks where you are.
+
+`goto` focuses the workspace's monitor as well as the workspace, so
+clicking the bar on your second screen moves you there even when the
+workspace is empty.
+
+Special/scratchpad workspaces are hyprland-only: sway keeps its
+scratchpad out of the workspace list, so nothing there is ever `special`.
+
 `current_only` is a plain option, so a user state can override it and a
-binding can toggle that state; this shows only the focused workspace
-after a right click:
+binding can toggle that state; this shows only what is on screen after a
+right click:
 
 ```yaml
 - ws:

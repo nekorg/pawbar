@@ -13,8 +13,8 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +25,8 @@ const (
 	ipcMagic                      = "i3-ipc"
 	I3_IPC_MESSAGE_TYPE_SUBSCRIBE = 2
 	IPC_GET_WORKSPACES            = 1
+	msgTypeRunCommand             = 0
+	msgTypeGetOutputs             = 3
 	msgTypeGetTree                = 4
 
 	maxBackoff = 30 * time.Second
@@ -70,10 +72,26 @@ type I3Event struct {
 }
 
 type Workspace struct {
-	Id      int    `json:"num"`
-	Name    string `json:"name"`
-	Focused bool   `json:"focused"`
-	Urgent  bool   `json:"urgent"`
+	Id   int    `json:"num"`
+	Name string `json:"name"`
+	// Output is the monitor the workspace lives on.
+	Output string `json:"output"`
+	// Visible means displayed on its output; Focused means it also has
+	// input focus, which only one workspace has at a time.
+	Visible bool `json:"visible"`
+	Focused bool `json:"focused"`
+	Urgent  bool `json:"urgent"`
+}
+
+// Output is one monitor as i3/sway sees it.
+type Output struct {
+	Name             string `json:"name"`
+	Active           bool   `json:"active"`
+	Focused          bool   `json:"focused"`
+	CurrentWorkspace string `json:"current_workspace"`
+	Rect             struct {
+		X, Y, Width, Height int
+	} `json:"rect"`
 }
 
 type WindowProperties struct {
@@ -82,7 +100,13 @@ type WindowProperties struct {
 }
 
 type I3Node struct {
-	Focused          bool              `json:"focused"`
+	ID      int    `json:"id"`
+	Type    string `json:"type"`
+	Focused bool   `json:"focused"`
+	// Focus is this container's children in focus order, most recent
+	// first. Following it from an output leads to the window that output
+	// is showing, whether or not the output itself has focus.
+	Focus            []int             `json:"focus"`
 	Nodes            []I3Node          `json:"nodes"`
 	FloatingNodes    []I3Node          `json:"floating_nodes"`
 	WindowProperties *WindowProperties `json:"window_properties"`
@@ -283,7 +307,9 @@ func (i *Service) listen(first *bool) error {
 		}
 	}()
 
-	subscription := []string{"window", "workspace"}
+	// output events fire on monitor hotplug, which moves workspaces
+	// between screens without any workspace event.
+	subscription := []string{"window", "workspace", "output"}
 	payload, err := json.Marshal(subscription)
 	if err != nil {
 		return fmt.Errorf("marshaling subscription payload: %w", err)
@@ -320,6 +346,9 @@ func (i *Service) listen(first *bool) error {
 				continue
 			}
 			i.dispatch("workspaces", event)
+		case 0x80000001: // output: a monitor appeared, went away or moved
+			i.dispatch("workspaces", I3Event{Change: "output"})
+			i.dispatch("activeWindow", I3WEvent{Change: "output"})
 		case 0x80000003:
 			var wevent I3WEvent
 			if err := json.Unmarshal(eventPayload, &wevent); err != nil {
@@ -332,6 +361,40 @@ func (i *Service) listen(first *bool) error {
 }
 
 func GetWorkspaces() ([]Workspace, error) {
+	payload, err := roundTrip(IPC_GET_WORKSPACES, nil)
+	if err != nil {
+		return nil, err
+	}
+	var workspaces []Workspace
+	if err = json.Unmarshal(payload, &workspaces); err != nil {
+		return nil, fmt.Errorf("unmarshaling workspaces: %w", err)
+	}
+	return workspaces, nil
+}
+
+// GetOutputs lists the monitors i3/sway knows about.
+func GetOutputs() ([]Output, error) {
+	payload, err := roundTrip(msgTypeGetOutputs, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []Output
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return nil, fmt.Errorf("unmarshaling outputs: %w", err)
+	}
+	return out, nil
+}
+
+// RunCommand sends a command to i3/sway over the IPC socket. Shelling out
+// to i3-msg would fail on sway, where only swaymsg exists.
+func RunCommand(command string) error {
+	_, err := roundTrip(msgTypeRunCommand, []byte(command))
+	return err
+}
+
+// roundTrip sends one message on a fresh connection and returns the reply
+// payload.
+func roundTrip(msgType uint32, payload []byte) ([]byte, error) {
 	conn, err := connectToI3()
 	if err != nil {
 		return nil, err
@@ -339,28 +402,31 @@ func GetWorkspaces() ([]Workspace, error) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	if err := sendI3Message(conn, IPC_GET_WORKSPACES, []byte("")); err != nil {
+	if err := sendI3Message(conn, msgType, payload); err != nil {
 		return nil, err
 	}
-
-	_, eventPayload, err := readResponse(conn)
+	_, reply, err := readResponse(conn)
 	if err != nil {
 		return nil, err
 	}
-
-	var workspaces []Workspace
-	if err = json.Unmarshal(eventPayload, &workspaces); err != nil {
-		return nil, fmt.Errorf("unmarshaling workspaces: %w", err)
-	}
-
-	return workspaces, nil
+	return reply, nil
 }
 
 func GoToWorkspace(name string) {
-	cmd := exec.Command("i3-msg", "workspace", name)
-	if err := cmd.Run(); err != nil {
+	if err := RunCommand("workspace " + quoteCriteria(name)); err != nil {
 		logging.Log.Error().Msgf("i3: workspace switch: %v", err)
 	}
+}
+
+// FocusOutput moves focus to a monitor by name.
+func FocusOutput(name string) error {
+	return RunCommand("focus output " + quoteCriteria(name))
+}
+
+// quoteCriteria quotes a workspace or output name for a command: names
+// can contain spaces, and i3 splits on them.
+func quoteCriteria(name string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(name) + `"`
 }
 
 func GetActiveWorkspace() (Workspace, error) {
@@ -440,4 +506,76 @@ func GetTitleClass() (string, string) {
 	}
 
 	return focusedProps.Class, focusedProps.Title
+}
+
+// GetTitleClassOn returns the class and title of the window one output is
+// showing, focused or not. Every container lists its children in focus
+// order, so the window on screen is found by following that order down
+// from the output instead of looking for the focused flag, which only the
+// focused output has.
+func GetTitleClassOn(output string) (string, string) {
+	payload, err := roundTrip(msgTypeGetTree, nil)
+	if err != nil {
+		logging.Log.Error().Msgf("i3: %v", err)
+		return "", ""
+	}
+	var root I3Node
+	if err := json.Unmarshal(payload, &root); err != nil {
+		logging.Log.Error().Msgf("i3: parsing tree: %v", err)
+		return "", ""
+	}
+
+	node := findOutput(&root, output)
+	if node == nil {
+		return "", ""
+	}
+	leaf := followFocus(node)
+	if leaf == nil || leaf.Type == "workspace" || leaf.Type == "output" {
+		return "", "" // an empty workspace
+	}
+	if isSway {
+		return leaf.AppId, leaf.Name
+	}
+	if leaf.WindowProperties == nil {
+		return "", ""
+	}
+	return leaf.WindowProperties.Class, leaf.WindowProperties.Title
+}
+
+func findOutput(n *I3Node, name string) *I3Node {
+	if n.Type == "output" && n.Name == name {
+		return n
+	}
+	for i := range n.Nodes {
+		if found := findOutput(&n.Nodes[i], name); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// followFocus walks the focus order down to a leaf.
+func followFocus(n *I3Node) *I3Node {
+	for len(n.Focus) > 0 {
+		next := childByID(n, n.Focus[0])
+		if next == nil {
+			break
+		}
+		n = next
+	}
+	return n
+}
+
+func childByID(n *I3Node, id int) *I3Node {
+	for i := range n.Nodes {
+		if n.Nodes[i].ID == id {
+			return &n.Nodes[i]
+		}
+	}
+	for i := range n.FloatingNodes {
+		if n.FloatingNodes[i].ID == id {
+			return &n.FloatingNodes[i]
+		}
+	}
+	return nil
 }
