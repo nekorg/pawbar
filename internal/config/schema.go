@@ -8,6 +8,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 
@@ -21,8 +22,14 @@ type File struct {
 	Left   []ModuleEntry
 	Middle []ModuleEntry
 	Right  []ModuleEntry
+	// Outputs holds the per-output `outputs:` sections, applied over the
+	// rest of the document by For.
+	Outputs map[string]*Override
 
 	Path string
+	// Output is the monitor this File was specialised for by For, empty
+	// for the base document.
+	Output string
 }
 
 // BarSettings are bar-global options.
@@ -42,6 +49,8 @@ type BarSettings struct {
 	// Defaults toggles the shipped module-defaults layer bar-wide
 	// (default true); entries can override with their own `defaults:`.
 	Defaults *bool `yaml:"defaults"`
+	// Outputs selects which monitors get a bar (default: all of them).
+	Outputs OutputSel `yaml:"outputs"`
 }
 
 func (b *BarSettings) fillDefaults() {
@@ -58,9 +67,11 @@ func (b *BarSettings) fillDefaults() {
 	if b.ShrinkMin == 0 {
 		b.ShrinkMin = 3
 	}
+	b.Outputs.fillDefaults()
 }
 
 func (b *BarSettings) validate(n *yaml.Node, issues *Issues) {
+	b.Outputs.validate(subNodeOr(n, "outputs", n), issues)
 	if b.ShrinkMin < 1 {
 		issues.add("bar.shrink_min", n, "must be at least 1 column, got %d", b.ShrinkMin)
 	}
@@ -101,7 +112,7 @@ type ModuleEntry struct {
 	Col  int
 }
 
-var topLevelKeys = []string{"bar", "theme", "left", "middle", "right"}
+var topLevelKeys = []string{"bar", "theme", "left", "middle", "right", "outputs"}
 
 // Load parses config bytes into a File, collecting Issues instead of
 // stopping at the first problem. The returned File is usable (with
@@ -147,6 +158,8 @@ func Load(data []byte, path string) (*File, Issues) {
 			f.Middle = parseEntries(v, "middle", &issues)
 		case "right":
 			f.Right = parseEntries(v, "right", &issues)
+		case "outputs":
+			f.Outputs = parseOutputs(v, &issues)
 		default:
 			issues.addHint("", k, didYouMean(k.Value, topLevelKeys),
 				"unknown key %q", k.Value)
@@ -156,16 +169,51 @@ func Load(data []byte, path string) (*File, Issues) {
 	f.Bar.fillDefaults()
 	f.Bar.validate(barNode, &issues)
 
-	// Substitute @vars everywhere they can appear.
-	if len(f.Theme.Vars) > 0 {
-		expandVars(f.Theme.Defaults, f.Theme.Vars)
-		for _, side := range [][]ModuleEntry{f.Left, f.Middle, f.Right} {
-			for _, e := range side {
-				expandVars(e.Node, f.Theme.Vars)
+	// Substitute @vars everywhere they can appear. A per-output section
+	// sees the base vars plus its own.
+	expandFileVars(f, f.Theme.Vars)
+	for _, name := range f.OutputNames() {
+		o := f.Outputs[name]
+		vars := f.Theme.Vars
+		if len(o.Theme.Vars) > 0 {
+			vars = make(map[string]string, len(f.Theme.Vars)+len(o.Theme.Vars))
+			maps.Copy(vars, f.Theme.Vars)
+			maps.Copy(vars, o.Theme.Vars)
+		}
+		if len(vars) > 0 {
+			expandVars(o.Theme.Defaults, vars)
+			for _, side := range [][]ModuleEntry{o.Left, o.Middle, o.Right} {
+				for _, e := range side {
+					expandVars(e.Node, vars)
+				}
 			}
+		}
+		if !f.Bar.Outputs.Matches(name) {
+			issues.add("outputs."+name, o.Key,
+				"not selected by bar.outputs (%s), so this section is never used", f.Bar.Outputs)
+		}
+		// Settings only make sense merged: a base `truncate_priority`
+		// plus an override's must still name all three anchors.
+		if o.Bar != nil {
+			merged := f.For(name)
+			merged.Bar.validate(o.Bar, &issues)
 		}
 	}
 	return f, issues
+}
+
+// expandFileVars substitutes @vars in the root document's theme defaults
+// and module entries.
+func expandFileVars(f *File, vars map[string]string) {
+	if len(vars) == 0 {
+		return
+	}
+	expandVars(f.Theme.Defaults, vars)
+	for _, side := range [][]ModuleEntry{f.Left, f.Middle, f.Right} {
+		for _, e := range side {
+			expandVars(e.Node, vars)
+		}
+	}
 }
 
 // Read loads and parses the config file at path.

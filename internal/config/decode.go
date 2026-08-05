@@ -90,6 +90,15 @@ func decodeBlock(n *yaml.Node, path string, issues *Issues) module.Block {
 	return b
 }
 
+// subNodeOr returns the value node of key inside mapping n, falling back to
+// alt when the key is absent, so an issue still gets a position.
+func subNodeOr(n *yaml.Node, key string, alt *yaml.Node) *yaml.Node {
+	if v := subNode(n, key); v != nil {
+		return v
+	}
+	return alt
+}
+
 // subNode returns the value node of key inside mapping n, or nil.
 func subNode(n *yaml.Node, key string) *yaml.Node {
 	if n == nil || n.Kind != yaml.MappingNode {
