@@ -45,7 +45,17 @@ type backend interface {
 
 type backlightModule struct {
 	opts *Options
-	b    backend
+
+	// b is the active backend: what Render, Set and the verbs go through.
+	b backend
+
+	// ddc is the DDC/CI backend when one was planned. It stays subscribed
+	// even while sysfs is standing in for it, which is what lets a display
+	// that was not answering yet take over later.
+	ddc *ddcBackend
+
+	// sys is the sysfs stand-in, built on the first demotion and kept.
+	sys *sysfsBackend
 }
 
 func (m *backlightModule) Init(ctx *module.Ctx) error {
@@ -112,34 +122,60 @@ func (m *backlightModule) pick(ctx *module.Ctx) (backend, error) {
 
 	if p.Mode == ModeDDC {
 		b := newDDCBackend(p.Display, m.opts.Poll.Go())
-		// Under `auto` a display that stops answering is not fatal: fall
+		m.ddc = b
+		// Under `auto` a display that is not answering is not fatal: fall
 		// back to whatever sysfs device exists rather than showing an
-		// error chip for a monitor that simply lacks DDC/CI.
+		// error chip for a monitor that simply lacks DDC/CI. The retreat
+		// is not final — a monitor still waking up at login answers a
+		// minute later, and promote takes it from there.
 		if m.opts.Backend == ModeAuto {
 			b.onFail = func(cause error) { m.demote(ctx, devs, cause) }
+			b.onReady = func() { m.promote() }
 		}
 		return b, nil
 	}
-	return newSysfsBackend(p.Device), nil
+	m.sys = newSysfsBackend(p.Device)
+	return m.sys, nil
 }
 
-// demote swaps a failed DDC backend for a sysfs one, once.
+// demote stands a sysfs backend in for a DDC display that is not answering.
 func (m *backlightModule) demote(ctx *module.Ctx, devs []sysfsDevice, cause error) {
-	if _, isDDC := m.b.(*ddcBackend); !isDDC {
+	if m.ddc == nil || m.b != m.ddc {
 		return
 	}
-	d, ok := legacyDevice(devs)
-	if !ok {
-		return
+	if m.sys == nil {
+		d, ok := legacyDevice(devs)
+		if !ok {
+			return
+		}
+		b := newSysfsBackend(d)
+		if err := b.Start(ctx); err != nil {
+			ctx.Log("sysfs fallback: %v", err)
+			return
+		}
+		m.sys = b
 	}
-	logging.Log.Info().Msgf("backlight: ddc unavailable (%v); falling back to %s", cause, d.Name)
+	logging.Log.Info().Msgf("backlight: ddc unavailable (%v); falling back to %s", cause, m.sys.dev.Name)
 
-	m.b.Stop()
-	b := newSysfsBackend(d)
-	m.b = b
-	if err := b.Start(ctx); err != nil {
-		ctx.Log("sysfs fallback: %v", err)
+	// The DDC backend is deliberately left running. Stopping it releases
+	// the ddc service handle, which drops the display's worker and with it
+	// every chance of ever probing again — that is precisely what made a
+	// monitor that was merely slow to wake at login stay on the wrong
+	// device until pawbar was restarted.
+	m.b = m.sys
+}
+
+// promote hands control back to the DDC display once it starts answering.
+func (m *backlightModule) promote() {
+	if m.ddc == nil || m.b == m.ddc {
+		return
 	}
+	logging.Log.Info().Msgf("backlight: %s: ddc/ci is answering; taking over from %s",
+		m.ddc.display.Connector, m.sys.dev.Name)
+
+	// m.sys keeps running: its udev subscription costs nothing, and a
+	// display that drops out again then needs no restart.
+	m.b = m.ddc
 }
 
 func describe(p plan) string {
@@ -167,9 +203,14 @@ func (m *backlightModule) OnState(ctx *module.Ctx) {
 	m.opts = ctx.Options().(*Options)
 }
 
+// Stop tears down both backends: after a demotion the sysfs stand-in and the
+// DDC backend are live at once, and only one of them is the active `b`.
 func (m *backlightModule) Stop(ctx *module.Ctx) {
-	if m.b != nil {
-		m.b.Stop()
+	if m.ddc != nil {
+		m.ddc.Stop()
+	}
+	if m.sys != nil {
+		m.sys.Stop()
 	}
 }
 

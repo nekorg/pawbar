@@ -76,6 +76,23 @@ func stubTransport(t *testing.T, ft transport, err error) {
 	t.Cleanup(func() { openTransport = old })
 }
 
+// stubTransportFunc makes openTransport run fn, for tests that need the probe
+// to behave differently from one attempt to the next.
+func stubTransportFunc(t *testing.T, fn func(Display) (transport, error)) {
+	t.Helper()
+	old := openTransport
+	openTransport = fn
+	t.Cleanup(func() { openTransport = old })
+}
+
+// shortBackoff shrinks the retry backoff so a test need not wait out a real one.
+func shortBackoff(t *testing.T, d time.Duration) {
+	t.Helper()
+	oldMin, oldMax := backoffMin, backoffMax
+	backoffMin, backoffMax = d, d
+	t.Cleanup(func() { backoffMin, backoffMax = oldMin, oldMax })
+}
+
 func startWorker(t *testing.T, ft transport, poll time.Duration) *worker {
 	t.Helper()
 	stubTransport(t, ft, nil)
@@ -295,6 +312,51 @@ func TestWorkerTickQuietWhenPollDisabled(t *testing.T) {
 
 	if ft.gets == 0 {
 		t.Error("never retried an unusable display, so it can never recover")
+	}
+}
+
+// A display that was not answering when the bar started has to be picked up
+// once it does. This is the login case: a monitor says nothing for the first
+// seconds after link-up, and giving up on that first probe leaves the bar on
+// the wrong device until pawbar is restarted.
+func TestWorkerRetriesFailedProbe(t *testing.T) {
+	shortBackoff(t, 5*time.Millisecond)
+
+	ft := &fakeTransport{cur: 40, max: 100}
+	var mu sync.Mutex
+	attempts := 0
+	stubTransportFunc(t, func(Display) (transport, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		attempts++
+		if attempts < 3 {
+			return nil, errors.New("no DDC/CI display")
+		}
+		return ft, nil
+	})
+
+	w := newWorker(Display{Connector: "DP-1"}, 5*time.Millisecond)
+	ready := make(chan Event, 1)
+	w.listen(func(ev Event) {
+		if !ev.Ready {
+			return
+		}
+		select {
+		case ready <- ev:
+		default:
+		}
+	})
+
+	go w.run()
+	t.Cleanup(w.stop)
+
+	select {
+	case ev := <-ready:
+		if ev.Pct != 40 {
+			t.Errorf("pct = %d, want 40", ev.Pct)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a display that started answering was never probed again")
 	}
 }
 

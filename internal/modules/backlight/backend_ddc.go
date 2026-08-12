@@ -31,8 +31,10 @@ type ddcBackend struct {
 	pct      int
 
 	// onFail lets `auto` retreat to sysfs when the display turns out not
-	// to speak DDC/CI after all.
-	onFail func(error)
+	// to speak DDC/CI after all, and onReady lets it come back once the
+	// display starts answering.
+	onFail  func(error)
+	onReady func()
 }
 
 func newDDCBackend(d ddc.Display, poll time.Duration) *ddcBackend {
@@ -60,6 +62,9 @@ func (b *ddcBackend) Start(ctx *module.Ctx) error {
 			return
 		}
 		b.cur, b.max, b.pct = int(ev.Cur), int(ev.Max), ev.Pct
+		if b.onReady != nil {
+			b.onReady()
+		}
 	})
 	return nil
 }

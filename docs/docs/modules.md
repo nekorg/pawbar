@@ -76,6 +76,13 @@ Step 1 comes first on purpose. A laptop panel usually exposes an I2C channel
 too — its DisplayPort AUX line — and talking DDC/CI to it does nothing good,
 so an attached backlight device always wins.
 
+A monitor that is not answering DDC/CI yet does not settle the question. Many
+displays say nothing for the first seconds after link-up, which is exactly when
+a bar started from `exec-once` probes them, so `auto` shows the sysfs device in
+the meantime and hands control back to DDC/CI as soon as the display replies.
+The same retry brings back a monitor that was switched off or on another input:
+it is re-probed on a backoff that settles at once a minute.
+
 Set `backend` explicitly to skip the guessing: `sysfs` never touches I2C, and
 `ddc` fails loudly rather than falling back. To vary it per monitor, put the
 entry under a top-level `outputs:` section:

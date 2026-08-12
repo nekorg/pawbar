@@ -35,8 +35,11 @@ const (
 	// stops there rather than exiting: a monitor that is merely asleep
 	// comes back.
 	failMax = 5
+)
 
-	// Poll backoff after failures, so a dead bus costs almost nothing.
+// Poll backoff after failures, so a dead bus costs almost nothing. backoffMin
+// is a variable so tests need not wait out a real backoff.
+var (
 	backoffMin = 1 * time.Second
 	backoffMax = 60 * time.Second
 )
@@ -167,6 +170,11 @@ type worker struct {
 
 	fails int
 
+	// loggedUnavail keeps a display that is simply not there from writing a
+	// line every time the probe is retried. It is cleared by a successful
+	// probe, so a display that drops out later still reports once.
+	loggedUnavail bool
+
 	wake chan struct{}
 	quit chan struct{}
 	done chan struct{}
@@ -291,10 +299,17 @@ func (w *worker) run() {
 	defer logging.Recover("ddc.worker." + w.d.Connector)
 	defer close(w.done)
 
-	t := w.open()
-	if t != nil {
-		defer t.Close()
-	}
+	// The transport is re-acquired, never given up on: a monitor answers
+	// nothing for the first seconds after link-up, so the probe that runs
+	// while the compositor is still starting can fail on a display that is
+	// perfectly fine a moment later.
+	var t transport
+	defer func() {
+		if t != nil {
+			t.Close()
+		}
+	}()
+	t = w.open()
 
 	timer := time.NewTimer(w.interval())
 	defer timer.Stop()
@@ -305,31 +320,30 @@ func (w *worker) run() {
 			return
 		case <-w.wake:
 			if t == nil {
+				// Nothing to flush to yet. A wake is a request to try the
+				// display again, and the probe is the only way to.
+				t = w.open()
 				continue
 			}
 			w.flush(t)
 		case <-timer.C:
 			if t == nil {
-				// No transport at all: nothing to retry against.
-				return
+				t = w.open()
+			} else {
+				w.tick(t)
 			}
-			w.tick(t)
 			timer.Reset(w.interval())
 		}
 	}
 }
 
-// open performs the probe and publishes its outcome.
+// open performs the probe and publishes its outcome. A nil return is not the
+// end of the display: run retries on the backoff interval.
 func (w *worker) open() transport {
 	start := time.Now()
 	t, err := openTransport(w.d)
 	if err != nil {
-		w.mu.Lock()
-		w.ready, w.lastErr = false, err
-		snap := w.snapshotLocked()
-		w.mu.Unlock()
-		logging.Log.Info().Msgf("ddc: %s: unavailable: %v", w.d.Connector, err)
-		w.emit(snap)
+		w.probeFailed("unavailable", err)
 		return nil
 	}
 	if d := time.Since(start); d > probeDeadline {
@@ -339,17 +353,13 @@ func (w *worker) open() transport {
 	cur, max, err := t.Get(VCPLuminance)
 	if err != nil {
 		t.Close()
-		w.mu.Lock()
-		w.ready, w.lastErr = false, err
-		snap := w.snapshotLocked()
-		w.mu.Unlock()
-		logging.Log.Info().Msgf("ddc: %s: unusable: %v", w.d.Connector, err)
-		w.emit(snap)
+		w.probeFailed("unusable", err)
 		return nil
 	}
 
 	w.mu.Lock()
 	w.cur, w.max, w.ready, w.lastErr = cur, max, true, nil
+	w.fails, w.loggedUnavail = 0, false
 	snap := w.snapshotLocked()
 	w.mu.Unlock()
 
@@ -357,6 +367,32 @@ func (w *worker) open() transport {
 		w.d.Connector, t.Name(), snap.Pct, cur, max)
 	w.emit(snap)
 	return t
+}
+
+// probeFailed records a probe that produced no usable transport.
+//
+// It counts as a failure so the retry backs off, and it says so once: a
+// connector that will never answer — an eDP panel's AUX channel, a monitor
+// left switched off — must not write a line or force a redraw every minute
+// for the rest of the session.
+func (w *worker) probeFailed(what string, err error) {
+	w.mu.Lock()
+	prev := w.lastErr
+	w.ready, w.lastErr = false, err
+	w.fails++
+	first := !w.loggedUnavail
+	w.loggedUnavail = true
+	snap := w.snapshotLocked()
+	w.mu.Unlock()
+
+	if first {
+		logging.Log.Info().Msgf("ddc: %s: %s: %v", w.d.Connector, what, err)
+	} else {
+		logging.Log.Debug().Msgf("ddc: %s: still %s: %v", w.d.Connector, what, err)
+	}
+	if first || prev == nil || prev.Error() != err.Error() {
+		w.emit(snap)
+	}
 }
 
 // flush drains the pending slot. Because the slot holds only the newest
