@@ -154,9 +154,15 @@ func TestHyprRegionRoundTrip(t *testing.T) {
 	if got := b.Region(Workspace{ID: 3, Name: "3"}); got != "3" {
 		t.Errorf("region = %q, want the id", got)
 	}
+	// A named workspace has a negative id; a negative id handed to the
+	// dispatch is a relative move, so the click must go by name.
+	got := b.Region(Workspace{ID: -1342, Name: "web"})
+	if got != "web" {
+		t.Errorf("named region = %q, want the name", got)
+	}
 	// Special workspaces are switched by name: "workspace -98" does
 	// nothing, which is why clicking one never worked.
-	got := b.Region(Workspace{ID: -98, Name: "special:magic", Special: true})
+	got = b.Region(Workspace{ID: -98, Name: "special:magic", Special: true})
 	if got != "special:magic" {
 		t.Errorf("special region = %q, want the name", got)
 	}

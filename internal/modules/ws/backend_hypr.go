@@ -224,9 +224,15 @@ func (b *hyprBackend) List() []Workspace {
 func (b *hyprBackend) Events() <-chan struct{} { return b.sig }
 
 // Region identifies a workspace in a click. Special workspaces are
-// switched by name, everything else by id.
+// switched by name, and so are named workspaces: Hyprland gives a named
+// workspace a negative id (e.g. -1342), and a negative number handed to
+// the workspace dispatch is parsed as a relative move rather than an
+// absolute workspace id. Only a plain numbered workspace goes by id.
 func (b *hyprBackend) Region(w Workspace) string {
 	if w.Special {
+		return w.Name
+	}
+	if w.Name != "" && w.Name != strconv.Itoa(w.ID) {
 		return w.Name
 	}
 	return strconv.Itoa(w.ID)
