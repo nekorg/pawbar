@@ -47,7 +47,8 @@ func (m *volumeModule) Init(ctx *module.Ctx) error {
 		return m.svc.AdjustVolume(-m.step())
 	})
 	ctx.HandleVerb("sink-menu", func(a module.VerbArgs) error {
-		return menus.OpenList(ctx, menus.FromVerb(a), sink.Menu(m.st, m.svc.SetDefaultSink))
+		return menus.OpenList(ctx, menus.FromVerb(a),
+			sink.Menu(m.st, m.opts.AvailableOnly, m.svc.SetDefaultSink))
 	})
 	return nil
 }
@@ -75,7 +76,7 @@ func (m *volumeModule) Stop(ctx *module.Ctx) {
 func (m *volumeModule) Render(w *module.Writer) {
 	s, _ := m.st.DefaultSink()
 	vol := int(math.Round(s.Volume))
-	w.Text(module.P{"icon": m.icon(vol), "vol": vol, "sink": s.Label()})
+	w.Text(module.P{"icon": m.icon(vol), "vol": vol, "sink": s.Label})
 }
 
 func (m *volumeModule) icon(vol int) string {

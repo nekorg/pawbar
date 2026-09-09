@@ -597,6 +597,7 @@ Shipped defaults:
 format: "{icon} {vol}%"
 icons: ["󰕿", "󰖀", "󰕾"]
 step: 5
+available_only: true
 states:
   muted: { fg: darkgray, format: "󰖁 MUTED" }
   disconnected: { fg: darkgray, format: "󰖁" }
@@ -611,12 +612,13 @@ on:
 |---|---|---|
 | `icons` | `["󰕿", "󰖀", "󰕾"]` | icon ramp, picked by volume |
 | `step` | `5` | percentage step for `volume-up`/`volume-down` |
+| `available_only` | `true` | hide devices with nothing plugged in from the sink menu |
 
 | Placeholder | Description |
 |---|---|
 | `{icon}` | volume level icon |
 | `{vol}` | volume percentage |
-| `{sink}` | default sink description, e.g. `WH-1000XM4` |
+| `{sink}` | default sink name, e.g. `WH-1000XM4` |
 
 | State | Shipped styling | When |
 |---|---|---|
@@ -630,10 +632,23 @@ on:
 | `volume-down` | lower by `step` (shipped: `scroll-down`) |
 | `sink-menu` | open the output-device picker (shipped: `right`) |
 
-The sink menu lists every output with its current volume and a radio mark
-on the active one. Picking one sets the default sink; whether already
-playing streams follow is up to the audio server — pipewire-pulse moves
-them, classic pulseaudio leaves them where they are.
+The sink menu lists outputs with their current volume and a radio mark on
+the active one. Picking one sets the default sink; whether already playing
+streams follow is up to the audio server: pipewire-pulse moves them,
+classic pulseaudio leaves them where they are.
+
+Device names are shortened: pulseaudio reports a sink as its card name
+with the profile glued on the end (`Core Ultra 200H/200V Series Processors
+HD Audio HDMI / DisplayPort 1 Output`), and the menu shows what pipewire
+calls the node instead: usually the monitor's own name, `Speaker`, or the
+bluetooth device. Without pipewire the card prefix is stripped off the
+description instead.
+
+`available_only` hides outputs whose port reports nothing plugged into it,
+which is what keeps unused HDMI/DisplayPort outputs off the list. Devices
+with no jack detection at all (built-in speakers, USB DACs) and virtual
+sinks report no such thing and are always shown, as is the current default
+sink.
 
 ## `wifi`
 

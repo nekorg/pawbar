@@ -12,6 +12,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,19 +47,16 @@ var errBusy = errors.New("pulse: command queue full")
 // SinkInfo is one output device.
 type SinkInfo struct {
 	Name        string
-	Description string
+	Description string // as the server reports it
+	Label       string // short name, for display
 	Index       uint32
 	Volume      float64 // 0-100
 	Muted       bool
 	Channels    int
-}
-
-// Label is what a menu shows for the sink.
-func (s SinkInfo) Label() string {
-	if s.Description != "" {
-		return s.Description
-	}
-	return s.Name
+	// Available is false only when the device says it has nothing
+	// plugged in: an unused HDMI port, a headphone jack with no
+	// headphones.
+	Available bool
 }
 
 // State is a complete snapshot, never a delta.
@@ -216,7 +214,7 @@ func (p *PulseService) run() {
 
 // interesting picks the events worth a re-read. Sink events (any op)
 // keep the device list current; server events are how a default-sink
-// switch from pavucontrol arrives — dropping them was why the module sat
+// switch from pavucontrol arrives; dropping them was why the module sat
 // on a stale sink until something else happened to fire.
 func interesting(e pulseaudio.Event) bool {
 	return e.Facility == pulseaudio.EvSink || e.Facility == pulseaudio.EvServer
@@ -325,14 +323,56 @@ func (p *PulseService) snapshot() (State, error) {
 		st.Sinks = append(st.Sinks, SinkInfo{
 			Name:        s.Name,
 			Description: s.Description,
+			Label:       sinkLabel(s),
 			Index:       s.Index,
 			Volume:      volumePct(s.Cvolume),
 			Muted:       s.Muted,
 			Channels:    len(s.Cvolume),
+			Available:   sinkAvailable(s),
 		})
 	}
 	sort.Slice(st.Sinks, func(i, j int) bool { return st.Sinks[i].Index < st.Sinks[j].Index })
 	return st, nil
+}
+
+// sinkLabel picks something short enough to read in a menu.
+// Description is the card name with the profile glued on the end -
+// "Core Ultra 200H/200V Series Processors HD Audio HDMI / DisplayPort 1
+// Output" - which is useless in a list.
+func sinkLabel(s pulseaudio.Sink) string {
+	// pipewire names the node after what it actually is: the monitor's
+	// edid name, "Speaker", the bluetooth device.
+	if nick := strings.TrimSpace(s.PropList["node.nick"]); nick != "" {
+		return nick
+	}
+	// no nick (classic pulseaudio): drop the card prefix instead of
+	// reaching for device.profile.description, which is the generic half
+	// on bluetooth ("High Fidelity Playback (A2DP Sink)").
+	if card := s.PropList["device.description"]; card != "" {
+		if rest := strings.TrimSpace(strings.TrimPrefix(s.Description, card)); rest != "" && rest != s.Description {
+			return rest
+		}
+	}
+	if s.Description != "" {
+		return s.Description
+	}
+	return s.Name
+}
+
+// sinkAvailable is false only when every port says NO. Unknown is a
+// device with no jack detection - a built-in speaker, a usb dac - which
+// is not the same thing as unplugged.
+func sinkAvailable(s pulseaudio.Sink) bool {
+	// virtual sinks (null, combine, easyeffects) have no ports at all.
+	if len(s.Ports) == 0 {
+		return true
+	}
+	for _, p := range s.Ports {
+		if p.Available != pulseaudio.PortAvailableNo {
+			return true
+		}
+	}
+	return false
 }
 
 // volumePct reads channel 0; per-channel imbalance is not modelled.

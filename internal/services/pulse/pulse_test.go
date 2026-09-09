@@ -46,24 +46,107 @@ func TestVolumePct(t *testing.T) {
 	}
 }
 
-func TestDefaultSinkAndLabel(t *testing.T) {
+func TestDefaultSink(t *testing.T) {
 	st := State{Connected: true, Default: "b", Sinks: []SinkInfo{
-		{Name: "a", Description: "Speakers"},
+		{Name: "a", Label: "Speakers"},
 		{Name: "b", Volume: 40},
 	}}
 	s, ok := st.DefaultSink()
 	if !ok || s.Name != "b" || s.Volume != 40 {
 		t.Fatalf("DefaultSink() = %+v, %v", s, ok)
 	}
-	if got := s.Label(); got != "b" {
-		t.Errorf("Label() with no description = %q, want the sink name", got)
-	}
-	if got := st.Sinks[0].Label(); got != "Speakers" {
-		t.Errorf("Label() = %q, want the description", got)
-	}
 
 	if _, ok := (State{Default: "gone"}).DefaultSink(); ok {
 		t.Error("DefaultSink() found a sink that is not in the list")
+	}
+}
+
+func TestSinkLabel(t *testing.T) {
+	card := "Core Ultra 200H/200V Series Processors HD Audio"
+	for _, c := range []struct {
+		what string
+		sink pulseaudio.Sink
+		want string
+	}{
+		{
+			"pipewire nick wins",
+			pulseaudio.Sink{
+				Name:        "alsa_output.hdmi1",
+				Description: card + " HDMI / DisplayPort 1 Output",
+				PropList: map[string]string{
+					"node.nick":                  "LG FHD",
+					"device.description":         card,
+					"device.profile.description": "HDMI / DisplayPort 1 Output",
+				},
+			},
+			"LG FHD",
+		},
+		{
+			"no nick: card prefix is stripped",
+			pulseaudio.Sink{
+				Name:        "alsa_output.hdmi1",
+				Description: card + " HDMI / DisplayPort 1 Output",
+				PropList:    map[string]string{"device.description": card},
+			},
+			"HDMI / DisplayPort 1 Output",
+		},
+		{
+			// classic pulseaudio bluetooth: the card name IS the useful
+			// name, so stripping it must not leave an empty label.
+			"description that is only the card name survives",
+			pulseaudio.Sink{
+				Name:        "bluez_output.WH_1000XM4",
+				Description: "WH-1000XM4",
+				PropList:    map[string]string{"device.description": "WH-1000XM4"},
+			},
+			"WH-1000XM4",
+		},
+		{
+			"blank nick is ignored",
+			pulseaudio.Sink{
+				Name:        "x",
+				Description: "Some Sink",
+				PropList:    map[string]string{"node.nick": "  "},
+			},
+			"Some Sink",
+		},
+		{
+			"nothing but a name",
+			pulseaudio.Sink{Name: "null-sink"},
+			"null-sink",
+		},
+	} {
+		if got := sinkLabel(c.sink); got != c.want {
+			t.Errorf("%s: sinkLabel() = %q, want %q", c.what, got, c.want)
+		}
+	}
+}
+
+func TestSinkAvailable(t *testing.T) {
+	sink := func(avail ...uint32) pulseaudio.Sink {
+		s := pulseaudio.Sink{}
+		for _, a := range avail {
+			s.Ports = append(s.Ports, pulseaudio.SinkPort{Available: a})
+		}
+		return s
+	}
+
+	for _, c := range []struct {
+		what string
+		sink pulseaudio.Sink
+		want bool
+	}{
+		{"unplugged hdmi", sink(pulseaudio.PortAvailableNo), false},
+		{"monitor plugged in", sink(pulseaudio.PortAvailableYes), true},
+		{"no jack detection", sink(pulseaudio.PortAvailableUnknown), true},
+		{"virtual sink has no ports", sink(), true},
+		// one analog sink, headphones out but speakers still there.
+		{"any usable port keeps it", sink(pulseaudio.PortAvailableNo, pulseaudio.PortAvailableUnknown), true},
+		{"every port dead", sink(pulseaudio.PortAvailableNo, pulseaudio.PortAvailableNo), false},
+	} {
+		if got := sinkAvailable(c.sink); got != c.want {
+			t.Errorf("%s: sinkAvailable() = %v, want %v", c.what, got, c.want)
+		}
 	}
 }
 

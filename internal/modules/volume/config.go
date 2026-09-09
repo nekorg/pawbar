@@ -16,8 +16,9 @@ import (
 var defaults []byte
 
 type Options struct {
-	Icons []string       `yaml:"icons"`
-	Step  module.Percent `yaml:"step"`
+	Icons         []string       `yaml:"icons"`
+	Step          module.Percent `yaml:"step"`
+	AvailableOnly bool           `yaml:"available_only"`
 }
 
 func init() {

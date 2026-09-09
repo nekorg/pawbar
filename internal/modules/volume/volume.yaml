@@ -1,6 +1,7 @@
 format: "{icon} {vol}%"
 icons: ["󰕿", "󰖀", "󰕾"]
 step: 5
+available_only: true
 states:
   muted: { fg: darkgray, format: "󰖁 MUTED" }
   disconnected: { fg: darkgray, format: "󰖁" }

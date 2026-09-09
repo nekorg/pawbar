@@ -6,6 +6,8 @@ github.com/codelif/outputs v0.1.0 h1:qKISjFRoJgD6KDvBer8QEjXGsChFlvmyH6p5aNivRo8
 github.com/codelif/outputs v0.1.0/go.mod h1:Xh071cMvrv+e1krHKW5fwbHwWinQPLO50unk+D/onMA=
 github.com/codelif/pulseaudio v1.1.0 h1:1FuvA7URLj3qUJTijf0qQ2fiDxPcM+FVyoZ555b1LII=
 github.com/codelif/pulseaudio v1.1.0/go.mod h1:XLFQbmGVWnfNJ4lcxftFdm+CwlZRgEAjCgyW96XIeZw=
+github.com/codelif/pulseaudio v1.2.0 h1:RQFB33mSOm4w83BbGfEwN4w42xGi7ipDJe3+5EUU0rA=
+github.com/codelif/pulseaudio v1.2.0/go.mod h1:XLFQbmGVWnfNJ4lcxftFdm+CwlZRgEAjCgyW96XIeZw=
 github.com/codelif/shmstream v0.0.0-20250707213419-52bb1dd21b7b h1:eB+mqYl5zhNd2URmfgph1qLXm8GoQr8DZZZARl0ZPgs=
 github.com/codelif/shmstream v0.0.0-20250707213419-52bb1dd21b7b/go.mod h1:egLjfn0XvTi8zbz4O2E3EPFMfpQoxh0KK6vbcL5BBgw=
 github.com/codelif/xdgicons v0.3.1 h1:MUGcxlmxPKhnlkm22lrlq6j52/znmbt6nVzlVRh/56k=
