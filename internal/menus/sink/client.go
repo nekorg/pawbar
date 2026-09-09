@@ -20,10 +20,14 @@ import (
 // switches the default sink; the caller's own subscription is what
 // brings the bar back in sync afterwards.
 func Menu(st pulse.State, availableOnly bool, set func(name string) error) *menus.List {
+	return &menus.List{Items: Items(st, availableOnly, set)}
+}
+
+// Items is Menu's row list on its own, for feeding an open menu's
+// ListHandle.Update as the server state moves.
+func Items(st pulse.State, availableOnly bool, set func(name string) error) []menus.Item {
 	if !st.Connected {
-		return &menus.List{Items: []menus.Item{
-			{Label: "no audio server", Disabled: true},
-		}}
+		return []menus.Item{{Label: "no audio server", Disabled: true}}
 	}
 
 	sinks := st.Sinks
@@ -31,9 +35,7 @@ func Menu(st pulse.State, availableOnly bool, set func(name string) error) *menu
 		sinks = filterAvailable(sinks, st.Default)
 	}
 	if len(sinks) == 0 {
-		return &menus.List{Items: []menus.Item{
-			{Label: "no output devices", Disabled: true},
-		}}
+		return []menus.Item{{Label: "no output devices", Disabled: true}}
 	}
 
 	// pad every name to the same width so the percentages line up in
@@ -57,7 +59,7 @@ func Menu(st pulse.State, availableOnly bool, set func(name string) error) *menu
 			OnClick: func() { set(name) },
 		})
 	}
-	return &menus.List{Items: items}
+	return items
 }
 
 // filterAvailable drops devices with nothing plugged into them. The

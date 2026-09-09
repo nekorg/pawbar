@@ -633,7 +633,10 @@ on:
 | `sink-menu` | open the output-device picker (shipped: `right`) |
 
 The sink menu lists outputs with their current volume and a radio mark on
-the active one. Picking one sets the default sink; whether already playing
+the active one, and follows the server while it is open: volumes move as
+they change, devices appear and disappear as they are plugged in, and it
+fills itself in if the audio server comes back while you are looking at
+it. Picking one sets the default sink; whether already playing
 streams follow is up to the audio server: pipewire-pulse moves them,
 classic pulseaudio leaves them where they are.
 

@@ -8,7 +8,9 @@ package volume
 
 import (
 	"math"
+	"strings"
 
+	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/internal/menus/sink"
 	"github.com/nekorg/pawbar/internal/services/pulse"
 	"github.com/nekorg/pawbar/internal/utils"
@@ -47,8 +49,11 @@ func (m *volumeModule) Init(ctx *module.Ctx) error {
 		return m.svc.AdjustVolume(-m.step())
 	})
 	ctx.HandleVerb("sink-menu", func(a module.VerbArgs) error {
-		return menus.OpenList(ctx, menus.FromVerb(a),
-			sink.Menu(m.st, m.opts.AvailableOnly, m.svc.SetDefaultSink))
+		// options are only readable here, on the module goroutine.
+		only := m.opts.AvailableOnly
+		at := menus.FromVerb(a)
+		ctx.Go(func() { liveSinkMenu(ctx, at, m.svc, only) })
+		return nil
 	})
 	return nil
 }
@@ -66,6 +71,55 @@ func (m *volumeModule) OnState(ctx *module.Ctx) {
 }
 
 func (m *volumeModule) step() float64 { return float64(m.opts.Step.Go()) }
+
+// liveSinkMenu keeps the menu in step with the server for as long as it
+// is open: volumes move, devices come and go, a monitor gets plugged in.
+// It runs off the module goroutine, so it takes the service directly
+// rather than reading module state.
+func liveSinkMenu(ctx *module.Ctx, at menus.Anchor, svc *pulse.PulseService, only bool) {
+	set := svc.SetDefaultSink
+	items := sink.Items(svc.State(), only, set)
+
+	h, err := menus.OpenListH(ctx, at, &menus.List{Items: items})
+	if err != nil {
+		logging.Log.Error().Msgf("volume: opening sink menu: %v", err)
+		return
+	}
+	if h == nil {
+		return // the click toggled an open menu closed
+	}
+
+	l := svc.IssueListener()
+	defer svc.RemoveListener(l)
+
+	shown := itemSig(items)
+	for {
+		select {
+		case <-h.Done():
+			return
+		case st := <-l:
+			next := sink.Items(st, only, set)
+			// most snapshots change nothing the menu shows; resending
+			// them would respawn ids and resize the panel for nothing.
+			if sig := itemSig(next); sig != shown {
+				shown = sig
+				h.Update(next)
+			}
+		}
+	}
+}
+
+func itemSig(items []menus.Item) string {
+	var b strings.Builder
+	for _, it := range items {
+		b.WriteString(it.Label)
+		if it.Checked {
+			b.WriteByte(1)
+		}
+		b.WriteByte(0)
+	}
+	return b.String()
+}
 
 func (m *volumeModule) Stop(ctx *module.Ctx) {
 	if m.release != nil {
