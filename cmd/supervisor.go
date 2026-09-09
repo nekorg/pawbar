@@ -97,6 +97,10 @@ type supervisor struct {
 
 	exits chan panelExit
 
+	// panels serves menu panels to the bars; nil when the socket could not
+	// be opened, which leaves each bar spawning its own.
+	panels *panelBroker
+
 	// Seams for tests, which have neither a compositor nor a kitty.
 	listOutputs func() ([]string, error)
 	startPanel  func(name string) (*barPanel, error)
@@ -131,6 +135,9 @@ func (s *supervisor) run() int {
 	if err != nil {
 		s.log.Warn().Msgf("config: hot reload of the output selection disabled: %v", err)
 	}
+
+	s.panels = startBroker(s.log)
+	defer s.panels.stop()
 
 	tick := time.NewTicker(pollInterval)
 	defer tick.Stop()
@@ -224,6 +231,9 @@ func (s *supervisor) reconcile() {
 		} else {
 			s.log.Info().Msgf("%s: no longer selected, stopping its bar", name)
 		}
+		// Its warm menu panels go with it: they are pinned to that output and
+		// carry the geometry and scale it had.
+		s.panels.dropOutput(name)
 		s.stop(name, bp)
 	}
 

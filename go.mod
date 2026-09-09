@@ -15,7 +15,7 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/itchyny/timefmt-go v0.1.6
 	github.com/jochenvg/go-udev v0.0.0-20240801134859-b65ed646224b
-	github.com/nekorg/katnip v0.1.0
+	github.com/nekorg/katnip v0.2.0
 	github.com/rs/zerolog v1.35.1
 	github.com/shirou/gopsutil/v3 v3.24.5
 	go.rockorager.dev/vaxis v0.14.0
@@ -25,7 +25,7 @@ require (
 )
 
 require (
-	github.com/codelif/shmstream v0.0.0-20250707213419-52bb1dd21b7b // indirect
+	github.com/codelif/shmstream v0.1.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/jezek/xgb v1.3.0 // indirect
 	github.com/jkeiser/iter v0.0.0-20200628201005-c8aa0ae784d1 // indirect

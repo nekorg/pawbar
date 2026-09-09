@@ -299,9 +299,9 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 
 	render()
 
-	// Warm the first menu spare now that the bar is up, so even the first
-	// menu opens without paying the kitty spawn cost.
-	menus.PrewarmPool()
+	// Menu panels come from the supervisor, which pools them for every bar;
+	// connect now that the bar is up so the first click does not pay for it.
+	menus.Connect()
 
 	for {
 		select {
@@ -321,14 +321,19 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 					vx.PostEvent(vaxis.QuitEvent{})
 				}
 			case vaxis.FocusOut:
+				menus.PointerPresent(false)
 				engine.PointerLeft()
 				updateMouseShape(vx, vaxis.MouseShapeDefault, &mouseShape)
 			case vaxis.Mouse:
 				if ev.EventType == vaxis.EventLeave {
+					menus.PointerPresent(false)
 					engine.PointerLeft()
 					updateMouseShape(vx, vaxis.MouseShapeDefault, &mouseShape)
 					continue
 				}
+				// The pointer is on this bar, so this is the bar whose menus
+				// can be opened next: the warm panels belong on this monitor.
+				menus.PointerPresent(true)
 				leftHalf := true
 				if sz := vx.Size(); sz.XPixel > 0 && sz.Cols > 0 {
 					// Pixel offset within the clicked cell; inverts

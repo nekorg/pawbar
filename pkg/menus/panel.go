@@ -7,7 +7,9 @@
 package menus
 
 import (
+	"github.com/codelif/outputs"
 	"github.com/nekorg/katnip"
+	"github.com/nekorg/pawbar/internal/monitor"
 )
 
 // kittyOverrides is the one copy of the kitty tuning every menu panel
@@ -52,14 +54,17 @@ const (
 	offScreenMargin = 2000
 )
 
-// spawnHostPanel starts a warm menu-host panel: hidden, pinned to the
-// primary output (so its cell scale matches the eventual on-screen scale
-// even while parked off it), parked past that output's right edge, with a
+// spawnHostPanel starts a warm menu-host panel on mon: hidden, pinned to
+// that output (so its cell scale matches the eventual on-screen scale even
+// while parked off it), parked past that output's right edge, with a
 // non-grabbing focus policy so an idle spare never steals the keyboard.
 // The host maps itself off-screen (paying the map round-trip while idle)
 // and switches to exclusive focus only when a menu reveals it. Size is a
 // placeholder — the host resizes to the real menu on open.
-func spawnHostPanel() (*katnip.Panel, error) {
+//
+// A zero mon means the monitor is unknown; the panel then lands wherever
+// the compositor puts it, parked far enough right to stay invisible.
+func spawnHostPanel(mon outputs.Monitor) (*katnip.Panel, error) {
 	cfg := katnip.Config{
 		Position:       katnip.Vector{X: 100000, Y: 0}, // fallback park when the output is unknown
 		Size:           katnip.Vector{X: warmCols, Y: warmRows},
@@ -70,13 +75,19 @@ func spawnHostPanel() (*katnip.Panel, error) {
 		StartAsHidden:  true,
 		KittyOverrides: kittyOverrides,
 	}
-	if mon, ok := output(); ok {
+	if mon.Name != "" {
 		cfg.OutputName = mon.Name
 		if mon.ScaledWidth > 0 {
 			cfg.Position.X = mon.ScaledWidth + offScreenMargin
 		}
 	}
 	kn := katnip.NewPanel(hostInstance, cfg)
+	if mon.Name != "" {
+		// Spares are spawned by the supervisor, for every output rather than
+		// its own, so the host is told which monitor it is on instead of
+		// inheriting it.
+		kn.Cmd.Env = monitor.WithOutput(kn.Cmd.Env, mon.Name)
+	}
 	if err := kn.Start(); err != nil {
 		return nil, err
 	}

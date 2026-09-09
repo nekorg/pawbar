@@ -12,8 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fxamacker/cbor/v2"
-	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/pkg/menus/wire"
 )
@@ -59,31 +57,63 @@ var mgr manager
 // debounced against a just-closed one).
 func openRoot(o owner, name string, at Anchor, wCells, hCells int, autoClose bool) (*Handle, error) {
 	mgr.mu.Lock()
-	defer mgr.mu.Unlock()
-
-	if cur := mgr.current; cur != nil {
-		same := cur.owner == o
+	cur := mgr.current
+	same := cur != nil && cur.owner == o
+	if cur != nil {
 		mgr.current = nil
+	}
+	debounced := cur == nil && mgr.lastClosed == o && time.Since(mgr.lastClosedAt) < toggleDebounce
+	mgr.mu.Unlock()
+
+	// Tearing the old menu down and getting a panel for the new one are both
+	// slow — a panel that ignores MsgClose, a pool that has to spawn — and
+	// neither is worth stalling every other menu on.
+	if cur != nil {
 		cur.close()
-		if same {
-			return nil, nil
-		}
-	} else if mgr.lastClosed == o && time.Since(mgr.lastClosedAt) < toggleDebounce {
+	}
+	if same || debounced {
 		return nil, nil
 	}
 
-	_, _, geo := clampRoot(at, wCells, hCells)
-	t := &tree{owner: o, autoClose: autoClose, focused: make(map[*Handle]bool)}
-	h, err := t.spawn(name, wCells, hCells, geo)
+	p, err := acquire(name)
 	if err != nil {
 		return nil, err
 	}
+	_, _, geo := clampRoot(at, wCells, hCells)
+	t := &tree{owner: o, autoClose: autoClose, focused: make(map[*Handle]bool)}
+	h, err := t.spawn(p, name, wCells, hCells, geo)
+	if err != nil {
+		p.release()
+		p.free()
+		return nil, err
+	}
+
+	mgr.mu.Lock()
+	raced := mgr.current
 	mgr.current = t
+	mgr.mu.Unlock()
+	if raced != nil {
+		// Two modules opened a menu at once. Whoever got here last is the one
+		// the user is looking at; the other goes away.
+		raced.close()
+	}
 	return h, nil
 }
 
+// acquire gets a panel to put a menu in, from the supervisor when there is
+// one. It runs with no menu lock held: on a pool miss it costs a kitty spawn.
+func acquire(kind string) (*panelConn, error) {
+	start := time.Now()
+	p, err := panels().acquire()
+	if err != nil {
+		return nil, err
+	}
+	logging.Log.Debug().Msgf("menus: got a panel for %q in %s", kind, time.Since(start))
+	return p, nil
+}
+
 // noteClosed records a fully-closed tree; called from the root panel's
-// waiter goroutine, never with mgr.mu held by the same goroutine.
+// reader goroutine, never with mgr.mu held by the same goroutine.
 func (m *manager) noteClosed(t *tree) {
 	m.mu.Lock()
 	if m.current == t {
@@ -108,22 +138,15 @@ type tree struct {
 	suppressUntil time.Time
 }
 
-// spawn takes a warm panel from the pool, assigns it a menu (kind, size,
-// placement) via MsgOpen, and appends it to the tree. The caller then
-// streams content (MsgUpdate), which the host renders off-screen before
-// revealing itself on-screen.
-func (t *tree) spawn(kind string, wCells, hCells int, geo wire.Geometry) (*Handle, error) {
+// spawn assigns an acquired panel a menu (kind, size, placement) via MsgOpen
+// and appends it to the tree. The caller then streams content (MsgUpdate),
+// which the host renders off-screen before revealing itself on-screen.
+func (t *tree) spawn(p *panelConn, kind string, wCells, hCells int, geo wire.Geometry) (*Handle, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return nil, errors.New("menu already closed")
 	}
-	acqStart := time.Now()
-	wp, err := pool.acquire()
-	if err != nil {
-		return nil, err
-	}
-	logging.Log.Debug().Msgf("menus: acquired %q spare in %s", kind, time.Since(acqStart))
 	// The panel grabs focus from its parent long before it can report
 	// FocusGained; don't let that window read as "the menu lost focus".
 	t.suppressUntil = time.Now().Add(spawnFocusGrace)
@@ -132,9 +155,7 @@ func (t *tree) spawn(kind string, wCells, hCells int, geo wire.Geometry) (*Handl
 		t.focusTimer = nil
 	}
 	h := &Handle{
-		panel:  wp.panel,
-		enc:    wp.enc,
-		dec:    wp.dec,
+		conn:   p,
 		tree:   t,
 		msgs:   make(chan wire.Msg, 32),
 		done:   make(chan struct{}),
@@ -147,7 +168,6 @@ func (t *tree) spawn(kind string, wCells, hCells int, geo wire.Geometry) (*Handl
 	}
 	t.panels = append(t.panels, h)
 	go h.read()
-	go h.wait()
 	return h, nil
 }
 
@@ -280,15 +300,14 @@ func (t *tree) focusTimeout() {
 	t.close()
 }
 
-// Handle is the bar process's grip on one live menu panel. The enc/dec
-// come from the pooled warm panel, so the wire has exactly one reader
-// across the pool→Handle handoff.
+// Handle is the bar process's grip on one live menu panel. The wire comes
+// from whoever supplied the panel, already positioned after MsgReady, and
+// this is its only reader.
 type Handle struct {
-	panel  *katnip.Panel
+	conn   *panelConn
 	tree   *tree
-	enc    *cbor.Encoder
-	dec    *cbor.Decoder
 	encMu  sync.Mutex
+	gone   bool // wire dropped; guarded by encMu
 	msgs   chan wire.Msg
 	done   chan struct{}
 	geoMu  sync.Mutex
@@ -301,7 +320,10 @@ type Handle struct {
 func (h *Handle) Send(m wire.Msg) error {
 	h.encMu.Lock()
 	defer h.encMu.Unlock()
-	return h.enc.Encode(m)
+	if h.gone {
+		return errors.New("menus: the panel is gone")
+	}
+	return h.conn.enc.Encode(m)
 }
 
 // Messages streams the panel's non-lifecycle messages (clicks, hovers,
@@ -326,7 +348,17 @@ func (h *Handle) OpenSub(name string, row, wCells, hCells int) (*Handle, error) 
 	geo, pw := h.geo, h.wCells
 	h.geoMu.Unlock()
 	_, _, subGeo := placeSubmenu(geo, pw, row, wCells, hCells)
-	return h.tree.spawn(name, wCells, hCells, subGeo)
+	p, err := acquire(name)
+	if err != nil {
+		return nil, err
+	}
+	sub, err := h.tree.spawn(p, name, wCells, hCells, subGeo)
+	if err != nil {
+		p.release()
+		p.free()
+		return nil, err
+	}
+	return sub, nil
 }
 
 // Geometry returns the panel's current placement.
@@ -336,30 +368,22 @@ func (h *Handle) Geometry() wire.Geometry {
 	return h.geo
 }
 
-// shutdown asks the panel to exit and escalates to SIGKILL if it
-// doesn't within the bounded waits.
+// shutdown asks the panel to exit and hands it straight back to whoever
+// supplied it, which signals it and escalates to SIGKILL if it has to. There
+// is no grace period here: a menu app that is wedged mid-frame never reads
+// MsgClose, and waiting on it only delays the next menu.
 func (h *Handle) shutdown() {
 	h.Send(wire.Msg{Type: wire.MsgClose})
-	h.panel.Stop()
-	select {
-	case <-h.done:
-		return
-	case <-time.After(closeWait):
-	}
-	logging.Log.Warn().Msg("menus: panel ignored close, killing")
-	h.panel.Kill()
-	select {
-	case <-h.done:
-	case <-time.After(killWait):
-		logging.Log.Error().Msg("menus: panel survived kill")
-	}
+	h.conn.release()
 }
 
 // read pumps child->parent messages: lifecycle ones go to the tree,
-// the rest to Messages().
+// the rest to Messages(). The wire ends when the panel process is gone and
+// its owner ends the stream, which is how an exit reaches the tree.
 func (h *Handle) read() {
-	dec := h.dec
+	defer h.exited()
 	defer close(h.msgs)
+	dec := h.conn.dec
 	for {
 		var m wire.Msg
 		if err := dec.Decode(&m); err != nil {
@@ -387,8 +411,8 @@ func (h *Handle) read() {
 			h.geoMu.Unlock()
 		default:
 			if m.Type == wire.MsgSubmenuReq && m.Geo != nil && m.Geo.PPCX > 0 && m.Geo.PPCY > 0 {
-				// The panel measured its own cell metrics; they beat
-				// the bar-derived estimate for placing its submenu.
+				// The panel measured its own cell metrics; they beat the
+				// bar-derived estimate for placing its submenu.
 				h.geoMu.Lock()
 				h.geo.PPCX = m.Geo.PPCX
 				h.geo.PPCY = m.Geo.PPCY
@@ -403,17 +427,22 @@ func (h *Handle) read() {
 	}
 }
 
-// wait reaps the panel process and propagates the exit to the tree.
-func (h *Handle) wait() {
-	h.panel.Wait()
+// exited runs once the wire has ended: the panel process is gone, so the
+// tree is told and this process's mapping of the wire is dropped. Nothing
+// reads it after read() returns, which is what makes that safe.
+func (h *Handle) exited() {
 	close(h.done)
+
+	h.encMu.Lock()
+	h.gone = true
+	h.encMu.Unlock()
+	h.conn.free()
+
 	t := h.tree
-	isRoot := false
 	t.mu.Lock()
-	if len(t.panels) > 0 && t.panels[0] == h {
-		isRoot = true
-	}
+	isRoot := len(t.panels) > 0 && t.panels[0] == h
 	t.mu.Unlock()
+
 	t.panelExited(h)
 	if isRoot {
 		mgr.noteClosed(t)
