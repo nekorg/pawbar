@@ -23,11 +23,11 @@ func Acquire() (*PulseService, func(), error) {
 	})
 }
 
-// Sinks is a typed source of default-sink change events from an acquired
-// service. Each subscription issues its own listener and detaches it on
-// stop, so hot-reloaded modules don't leave dead channels behind.
-func (p *PulseService) Sinks() module.Source[SinkEvent] {
-	return module.NewSource(func(emit func(SinkEvent)) (module.Conn, error) {
+// Sinks is a typed source of state snapshots from an acquired service.
+// Each subscription issues its own listener and detaches it on stop, so
+// hot-reloaded modules don't leave dead channels behind.
+func (p *PulseService) Sinks() module.Source[State] {
+	return module.NewSource(func(emit func(State)) (module.Conn, error) {
 		l := p.IssueListener()
 		done := make(chan struct{})
 		go func() {
@@ -43,15 +43,15 @@ func (p *PulseService) Sinks() module.Source[SinkEvent] {
 				}
 			}
 		}()
+		emit(p.State())
 		stop := func() {
 			p.RemoveListener(l)
 			close(done)
 		}
 		wake := func() {
 			// Resync after suspend: volume may have changed while asleep.
-			if e, err := p.GetDefaultSinkInfo(); err == nil {
-				emit(e)
-			}
+			p.Resync()
+			emit(p.State())
 		}
 		return module.ConnFuncs{StopFn: stop, WakeFn: wake}, nil
 	})

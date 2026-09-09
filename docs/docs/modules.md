@@ -586,6 +586,11 @@ scrolls it.
 
 Default-sink volume via pulseaudio/pipewire.
 
+Tracks whatever the audio server currently calls the default sink, so
+switching outputs elsewhere (`pavucontrol`, `pactl set-default-sink`) is
+picked up straight away. The connection is re-established on its own if
+the audio server restarts, and pawbar may be started before it is up.
+
 Shipped defaults:
 
 ```yaml
@@ -594,8 +599,10 @@ icons: ["󰕿", "󰖀", "󰕾"]
 step: 5
 states:
   muted: { fg: darkgray, format: "󰖁 MUTED" }
+  disconnected: { fg: darkgray, format: "󰖁" }
 on:
   left: toggle-mute
+  right: sink-menu
   scroll-up: volume-up
   scroll-down: volume-down
 ```
@@ -609,16 +616,24 @@ on:
 |---|---|
 | `{icon}` | volume level icon |
 | `{vol}` | volume percentage |
+| `{sink}` | default sink description, e.g. `WH-1000XM4` |
 
 | State | Shipped styling | When |
 |---|---|---|
 | `muted` | `fg: darkgray`, format `󰖁 MUTED` | the default sink is muted |
+| `disconnected` | `fg: darkgray`, format `󰖁` | no connection to the audio server |
 
 | Verb | Effect |
 |---|---|
 | `toggle-mute` | mute/unmute (shipped: `left`) |
 | `volume-up` | raise by `step` (shipped: `scroll-up`) |
 | `volume-down` | lower by `step` (shipped: `scroll-down`) |
+| `sink-menu` | open the output-device picker (shipped: `right`) |
+
+The sink menu lists every output with its current volume and a radio mark
+on the active one. Picking one sets the default sink; whether already
+playing streams follow is up to the audio server — pipewire-pulse moves
+them, classic pulseaudio leaves them where they are.
 
 ## `wifi`
 

@@ -28,15 +28,18 @@ func init() {
 		Options: func() any { return &Options{} },
 		States: []module.StateDef{
 			{Name: "muted", Doc: "the default sink is muted"},
+			{Name: "disconnected", Doc: "no connection to the audio server"},
 		},
 		Placeholders: []module.Placeholder{
 			{Name: "icon", Doc: "volume level icon", Kind: module.KindString},
 			{Name: "vol", Doc: "volume percentage", Kind: module.KindNumber},
+			{Name: "sink", Doc: "default sink description", Kind: module.KindString},
 		},
 		Verbs: []module.VerbDef{
 			{Name: "toggle-mute", Doc: "mute/unmute the default sink"},
 			{Name: "volume-up", Doc: "raise volume by `step`"},
 			{Name: "volume-down", Doc: "lower volume by `step`"},
+			{Name: "sink-menu", Doc: "open the output-device picker"},
 		},
 		Defaults: defaults,
 	})

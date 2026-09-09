@@ -3,7 +3,9 @@ icons: ["󰕿", "󰖀", "󰕾"]
 step: 5
 states:
   muted: { fg: darkgray, format: "󰖁 MUTED" }
+  disconnected: { fg: darkgray, format: "󰖁" }
 on:
   left: toggle-mute
+  right: sink-menu
   scroll-up: volume-up
   scroll-down: volume-down
