@@ -9,10 +9,11 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/nekorg/pawbar/internal/session"
 )
 
 // acquireLock takes the per-session pawbar lock. One pawbar owns every
@@ -40,19 +41,7 @@ func acquireLock() (*os.File, int, error) {
 	return f, 0, nil
 }
 
-func lockPath() string {
-	dir := os.Getenv("XDG_RUNTIME_DIR")
-	if dir == "" {
-		dir = os.TempDir()
-	}
-	name := "pawbar.lock"
-	if d := os.Getenv("WAYLAND_DISPLAY"); d != "" {
-		name = "pawbar-" + filepath.Base(d) + ".lock"
-	} else if d := os.Getenv("DISPLAY"); d != "" {
-		name = "pawbar-" + strings.TrimPrefix(d, ":") + ".lock"
-	}
-	return filepath.Join(dir, name)
-}
+func lockPath() string { return session.RuntimePath("lock") }
 
 // readLockPid reads the pid the lock holder wrote, 0 when unreadable.
 func readLockPid(f *os.File) int {

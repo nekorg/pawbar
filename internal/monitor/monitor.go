@@ -14,6 +14,7 @@ package monitor
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,4 +105,19 @@ func Scale() float64 {
 		return m.Scale
 	}
 	return 2.0
+}
+
+// WithOutput sets EnvOutput in a process environment, so a panel process
+// (and every helper it spawns) knows its monitor. Appending alone would not
+// do: with a duplicate key the child's getenv keeps the first one, and the
+// spawning process's own environment may already carry PAWBAR_OUTPUT.
+func WithOutput(env []string, name string) []string {
+	prefix := EnvOutput + "="
+	out := env[:0:0]
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, prefix) {
+			out = append(out, kv)
+		}
+	}
+	return append(out, prefix+name)
 }

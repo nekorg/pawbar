@@ -259,7 +259,7 @@ func (s *supervisor) spawn(name string) {
 // log stream and reaper.
 func (s *supervisor) startKitty(name string) (*barPanel, error) {
 	p := katnip.NewPanel("pawbar", barPanelConfig(name))
-	p.Cmd.Env = setEnv(p.Cmd.Env, monitor.EnvOutput, name)
+	p.Cmd.Env = monitor.WithOutput(p.Cmd.Env, name)
 
 	if err := p.Start(); err != nil {
 		return nil, err
@@ -381,18 +381,4 @@ func connectedOutputs() ([]string, error) {
 		}
 	}
 	return names, nil
-}
-
-// setEnv replaces key in a process environment. Appending alone would not
-// do: with a duplicate key the child's getenv keeps the first one, and the
-// supervisor's own environment may already carry PAWBAR_OUTPUT.
-func setEnv(env []string, key, value string) []string {
-	prefix := key + "="
-	out := env[:0:0]
-	for _, kv := range env {
-		if !strings.HasPrefix(kv, prefix) {
-			out = append(out, kv)
-		}
-	}
-	return append(out, prefix+value)
 }

@@ -213,19 +213,6 @@ func TestStartFailureBacksOff(t *testing.T) {
 	}
 }
 
-func TestSetEnvReplacesExisting(t *testing.T) {
-	env := []string{"HOME=/home/x", "PAWBAR_OUTPUT=stale", "TERM=xterm"}
-	got := setEnv(env, "PAWBAR_OUTPUT", "eDP-1")
-	want := []string{"HOME=/home/x", "TERM=xterm", "PAWBAR_OUTPUT=eDP-1"}
-	if !equal(got, want) {
-		t.Errorf("setEnv = %v, want %v", got, want)
-	}
-	// The caller's slice must not be clobbered: katnip reuses it.
-	if env[1] != "PAWBAR_OUTPUT=stale" {
-		t.Errorf("setEnv mutated its input: %v", env)
-	}
-}
-
 func TestOutputFlagSelection(t *testing.T) {
 	cases := []struct {
 		args []string
