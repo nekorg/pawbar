@@ -34,7 +34,7 @@ const (
 	MsgHello   MsgType = iota // which bar this connection is
 	MsgPointer                // the pointer entered (On) or left this bar
 	MsgAcquire                // give me a panel on my output
-	MsgRelease                // done with lease ID, reclaim it
+	MsgRelease                // done with lease ID, reclaim it (Warm: it parked itself)
 
 	// supervisor -> bar
 	MsgGranted // lease ID is yours; attach its wire at Path
@@ -48,6 +48,7 @@ type Msg struct {
 	Path   string `cbor:",omitempty"` // katnip stream to attach (MsgGranted)
 	Err    string `cbor:",omitempty"` // MsgDenied
 	On     bool   `cbor:",omitempty"` // MsgPointer
+	Warm   bool   `cbor:",omitempty"` // MsgRelease: the panel parked itself and can be reused
 }
 
 // acquireTimeout bounds a bar's wait for a panel. A warm spare answers in
@@ -88,8 +89,12 @@ func (c *Client) send(m Msg) error {
 // the supervisor decides where to keep the spares.
 func (c *Client) Pointer(on bool) error { return c.send(Msg{Type: MsgPointer, On: on}) }
 
-// Release hands a leased panel back; the supervisor closes and reaps it.
-func (c *Client) Release(id uint64) error { return c.send(Msg{Type: MsgRelease, ID: id}) }
+// Release hands a leased panel back. warm says the panel answered MsgClose by
+// parking itself, so the supervisor can put it straight back in the pool;
+// without it the panel is in an unknown state and gets killed.
+func (c *Client) Release(id uint64, warm bool) error {
+	return c.send(Msg{Type: MsgRelease, ID: id, Warm: warm})
+}
 
 // Acquire leases a panel for this bar's output and returns its id and the
 // katnip stream path to attach to.

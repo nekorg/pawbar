@@ -114,13 +114,13 @@ func (b *panelBroker) session(conn net.Conn) {
 				continue
 			}
 			if err := enc.Encode(lease.Msg{Type: lease.MsgGranted, ID: id, Path: path}); err != nil {
-				b.broker.Release(id)
+				b.broker.Release(id, false)
 				return
 			}
 			held = append(held, id)
 
 		case lease.MsgRelease:
-			b.broker.Release(m.ID)
+			b.broker.Release(m.ID, m.Warm)
 			held = remove(held, m.ID)
 		}
 	}

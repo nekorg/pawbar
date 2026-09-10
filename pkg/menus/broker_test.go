@@ -2,6 +2,7 @@ package menus
 
 import (
 	"os/exec"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -169,10 +170,63 @@ func TestAcquireTakesAWarmSpare(t *testing.T) {
 	if id == 0 || path == "" {
 		t.Fatalf("Acquire = %d, %q; want a lease and a wire to attach", id, path)
 	}
-	// The pool refills behind the lease.
-	waitFor(t, "the pool to refill", func() bool { return b.idleCount("DP-1") == 2 })
-	if got, want := f.count("DP-1"), 3; got != want {
+	// A leased panel holds its output's budget, so nothing is spawned to
+	// stand in for one that is coming back.
+	time.Sleep(3 * settleDelay)
+	if got := b.idleCount("DP-1"); got != 1 {
+		t.Fatalf("DP-1 holds %d spares behind the lease, want 1", got)
+	}
+	if got, want := f.count("DP-1"), 2; got != want {
 		t.Fatalf("spawned %d panels on DP-1, want %d", got, want)
+	}
+}
+
+// A panel that parked itself goes straight back to the pool, so opening and
+// closing a menu costs no spawn at all.
+func TestReleaseRecyclesAWarmPanel(t *testing.T) {
+	b, f := testBroker(t, PoolSettings{Target: 2, Max: 2})
+	b.WarmFor("DP-1")
+	settled(t, b, 2, 0)
+
+	id, _, err := b.Acquire("DP-1")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	b.mu.Lock()
+	sp := b.leased[id]
+	b.mu.Unlock()
+
+	b.Release(id, true)
+	settled(t, b, 2, 0)
+	if got := f.count("DP-1"); got != 2 {
+		t.Fatalf("spawned %d panels for one open and close, want 2 (the pool)", got)
+	}
+
+	b.mu.Lock()
+	back := slices.Contains(b.idle["DP-1"], sp)
+	b.mu.Unlock()
+	if !back {
+		t.Fatal("the panel was not the one that came back")
+	}
+	if !sp.alive() {
+		t.Fatal("a recycled panel was killed anyway")
+	}
+}
+
+// A bar that died left its panel showing a menu, so it cannot be trusted.
+func TestReleaseKillsAPanelThatDidNotPark(t *testing.T) {
+	b, _ := testBroker(t, PoolSettings{Target: 2, Max: 2})
+	id, _, err := b.Acquire("DP-1")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	b.mu.Lock()
+	sp := b.leased[id]
+	b.mu.Unlock()
+
+	b.Release(id, false)
+	if sp.alive() {
+		t.Fatal("a panel released without parking was kept")
 	}
 }
 
@@ -189,15 +243,21 @@ func TestAcquireSpawnsWhenThePoolIsElsewhere(t *testing.T) {
 	}
 }
 
-// Opening a menu is intent too, so the pool follows the click.
+// Opening a menu is intent too, so the pool follows the click. The open menu
+// is one of DP-2's two panels, which is why only one spare joins it.
 func TestAcquireMovesTheIntent(t *testing.T) {
 	b, _ := testBroker(t, PoolSettings{Target: 2, Max: 2})
 	b.WarmFor("DP-1")
 	settled(t, b, 2, 0)
 
-	if _, _, err := b.Acquire("DP-2"); err != nil {
+	id, _, err := b.Acquire("DP-2")
+	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
+	settled(t, b, 0, 1)
+
+	// Closing it gives DP-2 the whole chain.
+	b.Release(id, true)
 	settled(t, b, 0, 2)
 }
 
@@ -214,7 +274,7 @@ func TestReleaseReapsThePanel(t *testing.T) {
 		t.Fatal("the lease is not recorded")
 	}
 
-	b.Release(id)
+	b.Release(id, false)
 	select {
 	case <-sp.done:
 	default:

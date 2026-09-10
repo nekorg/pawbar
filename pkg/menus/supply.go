@@ -30,8 +30,11 @@ type panelConn struct {
 	enc *cbor.Encoder
 	dec *cbor.Decoder
 
-	// release hands the panel back to its owner, which closes and reaps it.
-	release func()
+	// release hands the panel back to its owner. warm says the panel parked
+	// itself and can be reused; without it the owner kills it. Safe to call
+	// while this process is still reading the wire, which is what makes it
+	// the escalation for a panel that never answers MsgClose.
+	release func(warm bool)
 	// free drops this process's mapping of the wire. Only safe once nothing
 	// here reads it any more: the memory goes away under a blocked read.
 	free func()
@@ -92,10 +95,13 @@ func (s *leased) acquire() (*panelConn, error) {
 	// says nothing between MsgReady and the MsgOpen below.
 	stream, err := katnip.OpenStream(path)
 	if err != nil {
-		s.client.Release(id)
+		s.client.Release(id, false)
 		return nil, fmt.Errorf("menus: attaching the panel wire: %w", err)
 	}
-	return newConn(stream, func() { s.client.Release(id) }, stream.Close), nil
+	// Unmapping before the release is what makes the hand-back safe: the
+	// wire has one read cursor, so the supervisor may only pick it up once
+	// this process has provably let go.
+	return newConn(stream, func(warm bool) { s.client.Release(id, warm) }, stream.Close), nil
 }
 
 func (s *leased) pointer(on bool) {
@@ -119,19 +125,24 @@ func (local) acquire() (*panelConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newConn(sp.panel.ReadWriter(), sp.shutdown, sp.free), nil
+	// Nothing to hand a panel back to, so releasing it means killing it;
+	// kill reaps the process first and only then unmaps, which is the
+	// opposite order to a leased panel and why each source picks its own.
+	return newConn(sp.panel.ReadWriter(), func(bool) { sp.kill() }, func() {}), nil
 }
 
 func (local) pointer(bool) {}
 
-func newConn(rw io.ReadWriter, release, free func()) *panelConn {
-	var once sync.Once
+func newConn(rw io.ReadWriter, release func(bool), free func()) *panelConn {
+	var freeOnce, releaseOnce sync.Once
 	return &panelConn{
-		enc:     cbor.NewEncoder(rw),
-		dec:     cbor.NewDecoder(rw),
-		release: release,
+		enc: cbor.NewEncoder(rw),
+		dec: cbor.NewDecoder(rw),
+		// A panel is handed back once: the close timeout and the wire
+		// ending both get here, and whichever is first is the truth.
+		release: func(warm bool) { releaseOnce.Do(func() { release(warm) }) },
 		// Unmapping twice could take out whatever mapping landed at that
 		// address in between, so it happens exactly once.
-		free: func() { once.Do(free) },
+		free: func() { freeOnce.Do(free) },
 	}
 }

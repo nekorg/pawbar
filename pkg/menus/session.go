@@ -19,6 +19,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/logging"
+	"github.com/nekorg/pawbar/internal/monitor"
 	"github.com/nekorg/pawbar/pkg/menus/wire"
 	"go.rockorager.dev/vaxis"
 )
@@ -78,6 +79,11 @@ type Session struct {
 
 	events chan vaxis.Event
 	msgs   chan wire.Msg
+	// stop asks hostLoop to let go of the event stream; finished says it
+	// has. The next menu on this panel reads those events, so the handover
+	// has to be a join, not a hope.
+	stop     chan struct{}
+	finished chan struct{}
 
 	// revealed guards the one-time on-screen reveal (Move) on first paint.
 	// Touched only by the app goroutine (the sole caller of Render).
@@ -161,6 +167,46 @@ func (s *Session) reveal(x, y int) {
 	if err != nil {
 		logging.Log.Warn().Msgf("menus: reveal failed: %v", err)
 		s.k.Move(x, y) // fall back to at least moving on-screen
+	}
+}
+
+// finish stops the host loop and waits for it to hand the event stream back.
+func (s *Session) finish() {
+	close(s.stop)
+	<-s.finished
+}
+
+// park puts the panel back where a spare lives: off-screen past its output's
+// right edge, at the warm size, with the keyboard released. The exact
+// inverse of reveal, and what makes a closed menu reusable instead of dead.
+func (s *Session) park() {
+	x := offScreenMargin
+	if mon, ok := monitor.Info(); ok && mon.ScaledWidth > 0 {
+		x = mon.ScaledWidth + offScreenMargin
+	}
+	err := s.k.Dispatch("resize-os-window", map[string]any{
+		"action":      "os-panel",
+		"incremental": true,
+		"os_panel": []string{
+			fmt.Sprintf("margin-left=%d", x),
+			"margin-top=0",
+			"focus-policy=not-allowed",
+		},
+	})
+	if err != nil {
+		logging.Log.Warn().Msgf("menus: parking failed: %v", err)
+		s.k.Move(x, 0)
+	}
+
+	// Only now is it safe to blank the screen: the panel is off it, so the
+	// last frame the user saw was the menu rather than an empty box.
+	s.vx.Window().Clear()
+	s.vx.Render()
+	drainEvents(s.vx)
+
+	s.k.Resize(warmCols, warmRows)
+	if r, ok := awaitResize(s.vx, warmCols, warmRows, mapWait); ok {
+		s.vx.Resize(r)
 	}
 }
 
@@ -253,8 +299,9 @@ func (s *Session) Reposition(cols, rows int) {
 
 // runHost is the generic menu host: one long-lived process that warms up
 // (mapped off-screen), waits to be assigned a menu, sizes itself to the
-// target, then runs the chosen renderer. The expensive kitty spawn,
-// vaxis handshake and foreground query are all paid before MsgOpen.
+// target, then runs the chosen renderer. The expensive kitty spawn, vaxis
+// handshake and foreground query are all paid before MsgOpen, and they are
+// paid once: a closed menu parks itself and waits for the next one.
 func runHost(k *katnip.Kitty, rw io.ReadWriter) int {
 	l.SetOutput(io.Discard)
 
@@ -305,69 +352,90 @@ func runHost(k *katnip.Kitty, rw io.ReadWriter) int {
 		_ = enc.Encode(wire.Msg{Type: wire.MsgReady})
 	}
 
-	// Idle until the bar assigns this spare a menu. Drain vaxis events so a
-	// long-idle spare never wedges vaxis on a full event buffer.
-	open, ok := waitOpen(vx, ctrl)
-	if !ok {
-		return 0
-	}
+	// One menu per turn round this loop. Everything expensive (the kitty
+	// process, vaxis, the foreground query) is per-process and outlives any
+	// one menu, so a closed menu parks itself and waits for the next one
+	// instead of dying and being respawned.
+	for {
+		// Idle until the bar assigns this spare a menu. Drain vaxis events so
+		// a long-idle spare never wedges vaxis on a full event buffer.
+		open, ok := waitOpen(vx, ctrl)
+		if !ok {
+			return 0
+		}
 
-	s := &Session{
-		vx:     vx,
-		k:      k,
-		fg:     fg,
-		enc:    enc,
-		events: make(chan vaxis.Event, 32),
-		msgs:   make(chan wire.Msg, 16),
-	}
-	if open.Geo != nil {
-		s.geo = *open.Geo
-	}
-	// Seed the panel's measured cell metrics from the settled size. The
-	// spare is pinned to its output, so it is already at the on-screen scale
-	// even while parked; revealing it fires no resize event, so submenu row
-	// alignment must take real pixels-per-cell from here, not the bar's
-	// estimate.
-	{
-		ws := vx.Size()
-		s.setSize(ws.Cols, ws.Rows, ws.XPixel, ws.YPixel)
-	}
+		s := &Session{
+			vx:       vx,
+			k:        k,
+			fg:       fg,
+			enc:      enc,
+			events:   make(chan vaxis.Event, 32),
+			msgs:     make(chan wire.Msg, 16),
+			stop:     make(chan struct{}),
+			finished: make(chan struct{}),
+		}
+		if open.Geo != nil {
+			s.geo = *open.Geo
+		}
+		// Seed the panel's measured cell metrics from the settled size. The
+		// spare is pinned to its output, so it is already at the on-screen
+		// scale even while parked; revealing it fires no resize event, so
+		// submenu row alignment must take real pixels-per-cell from here, not
+		// the bar's estimate.
+		{
+			ws := vx.Size()
+			s.setSize(ws.Cols, ws.Rows, ws.XPixel, ws.YPixel)
+		}
 
-	// Size to the target while still off-screen (at the settled real scale),
-	// so the app draws at the final size. Skip when already the right size
-	// (a menu that happens to match the spawn size), since no resize event
-	// would fire to wait for.
-	if open.Cols > 0 && open.Rows > 0 {
-		if c, r := vx.Window().Size(); c != open.Cols || r != open.Rows {
-			k.Resize(open.Cols, open.Rows)
-			if ev, ok := awaitResize(vx, open.Cols, open.Rows, resizeWait); ok {
-				vx.Resize(ev) // update vaxis size before the app draws
-				s.setSize(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
+		// Size to the target while still off-screen (at the settled real
+		// scale), so the app draws at the final size. Skip when already the
+		// right size (a menu that happens to match the spawn size), since no
+		// resize event would fire to wait for.
+		if open.Cols > 0 && open.Rows > 0 {
+			if c, r := vx.Window().Size(); c != open.Cols || r != open.Rows {
+				k.Resize(open.Cols, open.Rows)
+				if ev, ok := awaitResize(vx, open.Cols, open.Rows, resizeWait); ok {
+					vx.Resize(ev) // update vaxis size before the app draws
+					s.setSize(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
+				}
 			}
 		}
-	}
-	// Discard any trailing resize events so the app's first draw is real
-	// content (which triggers the on-screen reveal), not an empty frame.
-	drainEvents(vx)
+		// Discard any trailing resize events so the app's first draw is real
+		// content (which triggers the on-screen reveal), not an empty frame.
+		drainEvents(vx)
 
-	app := appLookup(open.Kind)
-	if app == nil {
-		logging.Log.Error().Msgf("menus: unknown menu kind %q", open.Kind)
-		return 1
-	}
+		app := appLookup(open.Kind)
+		if app == nil {
+			logging.Log.Error().Msgf("menus: unknown menu kind %q", open.Kind)
+			return 1
+		}
 
-	go s.hostLoop(vx, ctrl)
-	return app(s)
+		go s.hostLoop(vx, ctrl)
+		code := app(s)
+		if enc == nil {
+			// Nothing to hand the panel back to, so there is no point
+			// keeping it warm.
+			return code
+		}
+		s.finish()
+		s.park()
+		// The bar reads this and lets go of the wire; whoever owns the panel
+		// takes it back from there.
+		_ = enc.Encode(wire.Msg{Type: wire.MsgClosed})
+	}
 }
 
 // hostLoop is the per-menu boilerplate: it is the only sender on s.events
 // and the only party that closes it; the app exits by draining the closed
 // channel. Esc and focus events are handled here and never reach the app.
 func (s *Session) hostLoop(vx *vaxis.Vaxis, ctrl <-chan wire.Msg) {
+	defer close(s.finished)
 	defer close(s.events)
 	focused := false
 	for {
 		select {
+		case <-s.stop:
+			return
 		case ev := <-vx.Events():
 			switch ev := ev.(type) {
 			case vaxis.Resize:
@@ -392,7 +460,11 @@ func (s *Session) hostLoop(vx *vaxis.Vaxis, ctrl <-chan wire.Msg) {
 			case vaxis.QuitEvent:
 				return
 			}
-			s.events <- ev
+			select {
+			case s.events <- ev:
+			case <-s.stop:
+				return
+			}
 		case m, ok := <-ctrl:
 			if !ok {
 				// Wire gone: the bar died or tore the stream down.

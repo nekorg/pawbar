@@ -30,9 +30,10 @@ const settleDelay = 150 * time.Millisecond
 // returns as soon as MsgReady arrives.
 const readyTimeout = 5 * time.Second
 
-// Spare is a spawned menu host that has announced MsgReady and is waiting
-// for MsgOpen. The bar that leases it attaches to its wire directly; the
-// broker only spawns, hands over and reaps.
+// Spare is a spawned menu host that is warm and waiting for MsgOpen, either
+// because it has just announced MsgReady or because it closed a menu and
+// parked itself. The bar that leases it attaches to its wire directly; the
+// broker only spawns, hands over, takes back and reaps.
 type Spare struct {
 	panel *katnip.Panel
 	mon   outputs.Monitor
@@ -191,23 +192,39 @@ func (b *Broker) Acquire(output string) (uint64, string, error) {
 	return id, path, nil
 }
 
-// Release reclaims a leased panel: the bar has already asked it to close, so
-// this is the escalation and the reap.
-func (b *Broker) Release(id uint64) {
+// Release takes a leased panel back. warm says the panel answered MsgClose by
+// parking itself off-screen, so it is a spare again and goes straight back to
+// the pool: a menu opened and closed then costs no spawn at all. Without it
+// there is no telling what state the panel is in, and it is killed.
+func (b *Broker) Release(id uint64, warm bool) {
 	b.mu.Lock()
 	sp := b.leased[id]
 	delete(b.leased, id)
-	b.mu.Unlock()
 	if sp == nil {
+		b.mu.Unlock()
 		return
 	}
-	sp.kill()
+	// The lease id is spent: a late release must not reach the panel once
+	// somebody else has it.
+	sp.id = 0
+	output := sp.mon.Name
+	recycle := warm && !b.closed && sp.alive() && b.live(output) < b.want[output]
+	if recycle {
+		b.idle[output] = append(b.idle[output], sp)
+	}
+	b.mu.Unlock()
+
+	if !recycle {
+		sp.kill()
+	}
+	b.kick()
 }
 
 // ReleaseAll reclaims everything a bar held, for when the bar itself is gone.
+// Its panels are still showing menus, so none of them is warm.
 func (b *Broker) ReleaseAll(ids []uint64) {
 	for _, id := range ids {
-		b.Release(id)
+		b.Release(id, false)
 	}
 }
 
@@ -301,7 +318,7 @@ func (b *Broker) rebalance() {
 
 	var stale []*Spare
 	for output, queue := range b.idle {
-		surplus := min(len(queue)+b.warming[output]-b.want[output], len(queue))
+		surplus := min(b.live(output)-b.want[output], len(queue))
 		if surplus <= 0 {
 			continue
 		}
@@ -313,7 +330,7 @@ func (b *Broker) rebalance() {
 
 	need := make(map[string]int, len(order))
 	for _, output := range order {
-		if n := b.want[output] - len(b.idle[output]) - b.warming[output]; n > 0 {
+		if n := b.want[output] - b.live(output); n > 0 {
 			need[output] = n
 			b.warming[output] += n
 		}
@@ -338,7 +355,7 @@ func (b *Broker) warmOne(output string, mon outputs.Monitor) {
 
 	b.mu.Lock()
 	b.warming[output]--
-	keep := err == nil && !b.closed && len(b.idle[output]) < b.want[output]
+	keep := err == nil && !b.closed && b.live(output) < b.want[output]
 	if keep {
 		b.idle[output] = append(b.idle[output], sp)
 	}
@@ -350,6 +367,22 @@ func (b *Broker) warmOne(output string, mon outputs.Monitor) {
 	case !keep:
 		sp.kill()
 	}
+}
+
+// live counts the panels an output has: warm, warming, and the ones a bar is
+// showing. A leased panel holds its output's budget rather than being
+// replaced while it is open, because it comes back (see Release) and because
+// max is meant to cap the panels that exist, not just the idle ones.
+//
+// Caller holds b.mu.
+func (b *Broker) live(output string) int {
+	n := len(b.idle[output]) + b.warming[output]
+	for _, sp := range b.leased {
+		if sp.mon.Name == output {
+			n++
+		}
+	}
+	return n
 }
 
 // priority ranks the outputs the pool may warm on: most recent intent first,
@@ -481,6 +514,16 @@ func (sp *Spare) shutdown() {
 	case <-sp.done:
 	case <-time.After(killWait):
 		logging.Log.Error().Msg("menus: panel survived kill")
+	}
+}
+
+// alive reports whether the panel process is still there.
+func (sp *Spare) alive() bool {
+	select {
+	case <-sp.done:
+		return false
+	default:
+		return true
 	}
 }
 

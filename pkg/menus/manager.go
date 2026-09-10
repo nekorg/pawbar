@@ -83,7 +83,7 @@ func openRoot(o owner, name string, at Anchor, wCells, hCells int, autoClose boo
 	t := &tree{owner: o, autoClose: autoClose, focused: make(map[*Handle]bool)}
 	h, err := t.spawn(p, name, wCells, hCells, geo)
 	if err != nil {
-		p.release()
+		p.release(false)
 		p.free()
 		return nil, err
 	}
@@ -304,10 +304,13 @@ func (t *tree) focusTimeout() {
 // from whoever supplied the panel, already positioned after MsgReady, and
 // this is its only reader.
 type Handle struct {
-	conn   *panelConn
-	tree   *tree
-	encMu  sync.Mutex
-	gone   bool // wire dropped; guarded by encMu
+	conn  *panelConn
+	tree  *tree
+	encMu sync.Mutex
+	gone  bool // wire dropped; guarded by encMu
+	// warm records that the panel parked itself rather than died. Written
+	// by read, read by exited, which is read's own defer.
+	warm   bool
 	msgs   chan wire.Msg
 	done   chan struct{}
 	geoMu  sync.Mutex
@@ -354,7 +357,7 @@ func (h *Handle) OpenSub(name string, row, wCells, hCells int) (*Handle, error) 
 	}
 	sub, err := h.tree.spawn(p, name, wCells, hCells, subGeo)
 	if err != nil {
-		p.release()
+		p.release(false)
 		p.free()
 		return nil, err
 	}
@@ -368,18 +371,22 @@ func (h *Handle) Geometry() wire.Geometry {
 	return h.geo
 }
 
-// shutdown asks the panel to exit and hands it straight back to whoever
-// supplied it, which signals it and escalates to SIGKILL if it has to. There
-// is no grace period here: a menu app that is wedged mid-frame never reads
-// MsgClose, and waiting on it only delays the next menu.
+// shutdown asks the panel to close its menu. A live one answers by parking
+// itself off-screen and sending MsgClosed, which is what hands the wire back
+// (see exited) and what makes it reusable instead of dead.
+//
+// A menu app wedged mid-frame never reads MsgClose, so the hand-back is also
+// armed on a timer: releasing without the warm flag tells the owner to kill
+// it, which ends the wire and gets here the other way.
 func (h *Handle) shutdown() {
 	h.Send(wire.Msg{Type: wire.MsgClose})
-	h.conn.release()
+	time.AfterFunc(closeWait, func() { h.conn.release(false) })
 }
 
 // read pumps child->parent messages: lifecycle ones go to the tree,
-// the rest to Messages(). The wire ends when the panel process is gone and
-// its owner ends the stream, which is how an exit reaches the tree.
+// the rest to Messages(). The wire ends either because the panel parked
+// itself (MsgClosed) or because its process is gone and its owner ended the
+// stream; both reach the tree through exited.
 func (h *Handle) read() {
 	defer h.exited()
 	defer close(h.msgs)
@@ -393,6 +400,11 @@ func (h *Handle) read() {
 			return
 		}
 		switch m.Type {
+		case wire.MsgClosed:
+			// The panel is warm again and no longer ours. Stop reading so
+			// its owner can: the wire has one read cursor.
+			h.warm = true
+			return
 		case wire.MsgFocusGained:
 			h.tree.focusGained(h)
 		case wire.MsgFocusLost:
@@ -427,9 +439,10 @@ func (h *Handle) read() {
 	}
 }
 
-// exited runs once the wire has ended: the panel process is gone, so the
-// tree is told and this process's mapping of the wire is dropped. Nothing
-// reads it after read() returns, which is what makes that safe.
+// exited runs once the wire has ended: the panel is gone or parked, so the
+// tree is told, this process's mapping of the wire is dropped and the panel
+// is handed back. Nothing reads it after read() returns, which is what makes
+// unmapping safe and what lets the owner read the wire next.
 func (h *Handle) exited() {
 	close(h.done)
 
@@ -437,6 +450,7 @@ func (h *Handle) exited() {
 	h.gone = true
 	h.encMu.Unlock()
 	h.conn.free()
+	h.conn.release(h.warm)
 
 	t := h.tree
 	t.mu.Lock()

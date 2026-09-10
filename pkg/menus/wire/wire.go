@@ -26,6 +26,7 @@ const (
 	MsgFocusGained   // panel gained keyboard focus
 	MsgResized       // panel resized itself; Geo carries the new position/size
 	MsgReady         // host is warm (mapped off-screen) and awaiting MsgOpen
+	MsgClosed        // menu is done and the host has parked itself warm again
 )
 
 type Toggle int8
