@@ -46,6 +46,7 @@ func Pawbar() {
 	strictFlag := flag.Bool("strict", false, "refuse to start on any config issue")
 	checkFlag := flag.Bool("check", false, "validate the config and exit")
 	resolvedFlag := flag.Bool("resolved", false, "print the resolved per-slot configuration and exit")
+	exitFlag := flag.Bool("exit-without-monitors", false, "exit instead of waiting when the compositor reports no monitors")
 	var outputFlag outputList
 	flag.Var(&outputFlag, "output", "monitor(s) to put a bar on, overriding bar.outputs; repeatable, or `all`/`none`")
 	flag.Parse()
@@ -70,11 +71,11 @@ func Pawbar() {
 		os.Exit(2)
 	}
 
-	os.Exit(supervise(outputFlag.sel()))
+	os.Exit(supervise(outputFlag.sel(), *exitFlag))
 }
 
 // supervise runs the panel supervisor until a signal stops it.
-func supervise(flagSel *config.OutputSel) int {
+func supervise(flagSel *config.OutputSel, exitWithoutMonitors bool) int {
 	lock, holder, err := acquireLock()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pawbar is already running")
@@ -106,7 +107,11 @@ func supervise(flagSel *config.OutputSel) int {
 	}
 	log.Info().Msgf("monitors: %s", sel)
 
-	return newSupervisor(log, sel, flagSel, f.Bar.Kitty).run()
+	s := newSupervisor(log, sel, flagSel, f.Bar.Kitty)
+	// The flag only ever turns waiting off, so it needs no "was it set"
+	// bookkeeping: either side asking to leave is enough.
+	s.exitWithoutMonitors = exitWithoutMonitors || f.Bar.ExitWithoutMonitors
+	return s.run()
 }
 
 // barPanelConfig is the kitty panel every bar runs in, pinned to output.

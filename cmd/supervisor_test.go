@@ -243,3 +243,48 @@ func TestOutputFlagSelection(t *testing.T) {
 		}
 	}
 }
+
+func TestExitWithoutMonitors(t *testing.T) {
+	f := newFake(t, config.OutputSel{All: true})
+	f.exitWithoutMonitors = true
+	f.reconcile()
+	if !f.quit {
+		t.Fatal("no monitors and --exit-without-monitors, want the run to end")
+	}
+}
+
+func TestWaitsForMonitorsByDefault(t *testing.T) {
+	f := newFake(t, config.OutputSel{All: true})
+	f.reconcile()
+	if f.quit {
+		t.Fatal("no monitors, want pawbar to wait for one to appear")
+	}
+}
+
+// A deselected output is not a missing monitor: the config asked for no bars
+// and can ask for one again on the next reload.
+func TestExitWithoutMonitorsIgnoresDeselection(t *testing.T) {
+	f := newFake(t, config.OutputSel{}, "eDP-1")
+	f.exitWithoutMonitors = true
+	f.reconcile()
+	if f.quit {
+		t.Fatal("outputs: none with a monitor connected, want pawbar to keep running")
+	}
+}
+
+// Neither is a compositor pawbar cannot reach: that path falls back to an
+// unpinned bar rather than giving up.
+func TestExitWithoutMonitorsIgnoresAFailedQuery(t *testing.T) {
+	f := newFake(t, config.OutputSel{All: true})
+	f.exitWithoutMonitors = true
+	f.listErr = errors.New("no compositor")
+	for range fallbackAfter + 1 {
+		f.reconcile()
+	}
+	if f.quit {
+		t.Fatal("a failed monitor query is not an empty monitor list")
+	}
+	if got := f.runningNames(); !equal(got, []string{unpinned}) {
+		t.Fatalf("running = %v, want the unpinned fallback bar", got)
+	}
+}

@@ -53,6 +53,9 @@ type BarSettings struct {
 	Outputs OutputSel `yaml:"outputs"`
 	// Kitty tunes the kitty processes the bars and menus draw in.
 	Kitty KittySettings `yaml:"kitty"`
+	// ExitWithoutMonitors makes pawbar leave when the compositor reports
+	// no monitors, instead of waiting for one to appear.
+	ExitWithoutMonitors bool `yaml:"exit_without_monitors"`
 }
 
 // KittySettings decide how many kitty processes pawbar runs.

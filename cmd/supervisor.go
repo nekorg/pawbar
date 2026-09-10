@@ -102,6 +102,13 @@ type supervisor struct {
 	// be opened, which leaves each bar spawning its own.
 	panels *panelBroker
 
+	// exitWithoutMonitors ends the run when the compositor reports no
+	// monitors, instead of idling until one appears.
+	exitWithoutMonitors bool
+	// quit is set once something has decided the run is over; run acts on
+	// it at the top of its next turn.
+	quit bool
+
 	// kitty decides whether panels share one kitty process.
 	kitty config.KittySettings
 	// host is the shared instance every panel lives in, nil when panels
@@ -161,6 +168,10 @@ func (s *supervisor) run() int {
 	s.reconcile()
 
 	for {
+		if s.quit {
+			s.shutdown()
+			return 0
+		}
 		select {
 		case <-tick.C:
 			s.reconcile()
@@ -290,6 +301,16 @@ func (s *supervisor) reconcile() {
 		return
 	}
 	s.queryFails = 0
+
+	// No monitors at all is the one thing that cannot come right on its
+	// own here, so it is the one thing worth leaving over. A failed query
+	// is not it: that is a compositor pawbar cannot reach, and it falls
+	// back to an unpinned bar above.
+	if len(connected) == 0 && s.exitWithoutMonitors {
+		s.log.Info().Msg("monitors: none connected, exiting as asked")
+		s.quit = true
+		return
+	}
 
 	// A working monitor list supersedes the fallback bar.
 	if bp := s.running[unpinned]; bp != nil {
