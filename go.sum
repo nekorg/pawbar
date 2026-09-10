@@ -40,6 +40,8 @@ github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWE
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/nekorg/katnip v0.3.0 h1:7yQmBjCZQczwuM2E0Il+GAs11EQ1PpA5Qe02rECnp4k=
 github.com/nekorg/katnip v0.3.0/go.mod h1:mywgd8Jl8cqVzG9BU5l7O4zg/ENVkvj3mMwk2d+rPaQ=
+github.com/nekorg/katnip v0.4.0 h1:KUby5K2ebWFcoHg1gifPVkUuOuaxjRFxymo3ydsiIk8=
+github.com/nekorg/katnip v0.4.0/go.mod h1:mywgd8Jl8cqVzG9BU5l7O4zg/ENVkvj3mMwk2d+rPaQ=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c h1:ncq/mPwQF4JjgDlrVEn3C11VoGHZN7m8qihwgMEtzYw=

@@ -7,36 +7,13 @@
 package cmd
 
 import (
-	"io"
-	"os"
 	"slices"
 
 	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/config"
-	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/internal/session"
 	"github.com/nekorg/pawbar/pkg/menus"
 )
-
-// anchorInstance is the katnip identity of the window that holds the shared
-// kitty instance open. kitty exits when its last window closes, so a panel
-// coming and going must never be the last one.
-const anchorInstance = "pawhost"
-
-// hostClass is the app id of that hidden window. It should never appear
-// anywhere, but a name makes it identifiable if it does.
-const hostClass = "pawbar-host"
-
-// registerAnchor wires the identity the shared instance's hidden window runs
-// under. It does nothing but stay alive: the pty goes away with kitty, so the
-// read returns and the window closes on its own.
-func registerAnchor() {
-	katnip.RegisterFunc(anchorInstance, func(_ *katnip.Kitty, rw io.ReadWriter) int {
-		logging.SetupFileOnly(anchorInstance)
-		io.Copy(io.Discard, os.Stdin)
-		return 0
-	})
-}
 
 // hostOverrides is the kitty tuning every pawbar panel needs. In a shared
 // instance this is instance-wide, which is fine because the instance is ours:
@@ -66,8 +43,6 @@ func hostConfig(k config.KittySettings) katnip.HostConfig {
 		// Keyed to this session so a second compositor session, or a
 		// stray kitty --single-instance, never lands in our instance.
 		InstanceGroup: "pawbar-" + session.Key(),
-		Class:         hostClass,
 		KittyCmd:      k.Command,
-		AnchorName:    anchorInstance,
 	}
 }

@@ -30,10 +30,6 @@ import (
 
 func init() {
 	katnip.RegisterFunc("pawbar", mainLoop)
-	// The window that holds a shared kitty instance open. Registered
-	// before the menu host for the same reason it is registered at all:
-	// a matching identity runs its handler here and never returns.
-	registerAnchor()
 	// Register the generic menu-host identity last, so every menu kind is
 	// in the registry before a re-exec'd host dispatches on it. cmd's init
 	// runs after the menus/module packages it imports have registered.

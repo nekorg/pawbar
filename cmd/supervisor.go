@@ -151,12 +151,9 @@ func (s *supervisor) run() int {
 		s.log.Warn().Msgf("config: hot reload of the output selection disabled: %v", err)
 	}
 
-	// The shared instance has to exist before anything can be put in it,
-	// including the broker's first spares.
-	s.ensureHost()
-
-	s.panels = startBroker(s.log, s.spawner())
-	defer s.panels.stop()
+	// There is no instance yet: the first bar brings it up. Until then the
+	// pool has nowhere to put a spare, which is what a nil spawner means.
+	s.panels = startBroker(s.log, s.kitty.Shared(), s.spawner())
 
 	tick := time.NewTicker(pollInterval)
 	defer tick.Stop()
@@ -198,62 +195,56 @@ func (s *supervisor) spawner() func(outputs.Monitor) (*katnip.Panel, error) {
 	return menus.Spawner(s.host)
 }
 
-// ensureHost brings up the shared kitty instance if there should be one and
-// there is not. It reports whether panels can be started.
-func (s *supervisor) ensureHost() bool {
-	if !s.kitty.Shared() {
-		return true
-	}
-	if s.host != nil {
-		return true
-	}
-	if time.Now().Before(s.hostRetryAt) {
-		return false
-	}
-
-	host, err := katnip.Spawn(hostConfig(s.kitty))
+// startHost brings up the shared instance with cfg as its first panel. kitty
+// lives as long as it has a window, so the instance is exactly as long-lived
+// as the bars and menus in it: the first bar pays for it, and every panel
+// after that is a cheap window.
+func (s *supervisor) startHost(cfg katnip.Config) (*katnip.Panel, error) {
+	host, first, err := katnip.Spawn(hostConfig(s.kitty), "pawbar", cfg)
 	if err != nil {
 		s.hostFails++
 		backoff := min(respawnBase<<(s.hostFails-1), respawnMax)
 		s.hostRetryAt = time.Now().Add(backoff)
 		s.log.Error().Msgf("kitty: cannot start the shared instance (%v); retrying in %v", err, backoff)
-		return false
+		return nil, err
 	}
 	s.hostFails = 0
 	s.host = host
 	s.log.Info().Msgf("kitty: shared instance up on %s", host.Socket())
 
-	anchor := host.Anchor()
-	logging.Go("supervisor.pump.host", func() { pump(anchor.Reader()) })
 	go func() {
-		anchor.Wait()
+		<-host.Done()
 		select {
 		case s.hostExits <- struct{}{}:
 		default:
 		}
 	}()
-	return true
+
+	// The pool had nowhere to put a spare until now.
+	s.panels.rehost(s.spawner())
+	return first, nil
 }
 
 // dropHost forgets an instance that died. Every panel went with it, so they
 // are all marked as gone on purpose: their exits are not failures of their
-// own and must not count against them.
+// own and must not count against them. The next bar starts a new instance.
 func (s *supervisor) dropHost() {
 	if s.host == nil {
 		return
 	}
 	s.log.Warn().Msg("kitty: the shared instance exited, taking every panel with it")
+	s.closeHost()
+}
 
+// closeHost tears the instance down and suspends the pool with it.
+func (s *supervisor) closeHost() {
 	for name, bp := range s.running {
 		bp.stopped = true
 		delete(s.running, name)
 	}
 	s.host.Close()
 	s.host = nil
-
-	if s.ensureHost() {
-		s.panels.rehost(s.spawner())
-	}
+	s.panels.rehost(nil)
 }
 
 // reloadSelection re-reads bar.outputs after a config change. Panels that
@@ -281,8 +272,8 @@ func (s *supervisor) reloadSelection() bool {
 // reconcile brings the running panels in line with the connected outputs
 // and the current selection.
 func (s *supervisor) reconcile() {
-	if !s.ensureHost() {
-		return // nowhere to put a panel yet
+	if s.kitty.Shared() && s.host == nil && time.Now().Before(s.hostRetryAt) {
+		return // the instance is backing off; the next bar brings it up
 	}
 	connected, err := s.listOutputs()
 	if err != nil {
@@ -343,6 +334,14 @@ func (s *supervisor) reconcile() {
 		}
 		s.spawn(name)
 	}
+
+	// Nothing is left to hold the instance open, and nothing left for it to
+	// do. Close it rather than wait for it to work that out, and let the
+	// next bar start a fresh one.
+	if s.host != nil && len(s.running) == 0 {
+		s.log.Info().Msg("kitty: no bars left, closing the shared instance")
+		s.closeHost()
+	}
 }
 
 // spawn starts the bar for one output.
@@ -359,21 +358,28 @@ func (s *supervisor) spawn(name string) {
 
 // startKitty launches the panel, pinned to its output both in kitty
 // (--output-name) and in the panel process's environment, and wires up its
-// log stream and reaper. It goes into the shared instance when there is one,
-// and gets a kitty process of its own otherwise.
+// log stream and reaper. It goes into the shared instance, starting it when
+// this is the first bar, and gets a kitty process of its own otherwise.
 func (s *supervisor) startKitty(name string) (*barPanel, error) {
 	cfg := barPanelConfig(name)
 	cfg.Env = monitor.WithOutput(nil, name)
 
-	var p *katnip.Panel
-	if s.host != nil {
-		p = s.host.NewPanel("pawbar", cfg)
-	} else {
+	var (
+		p   *katnip.Panel
+		err error
+	)
+	switch {
+	case !s.kitty.Shared():
 		cfg.KittyOverrides = menus.PanelOverrides
 		p = katnip.NewPanel("pawbar", cfg)
+		err = p.Start()
+	case s.host != nil:
+		p = s.host.NewPanel("pawbar", cfg)
+		err = p.Start()
+	default:
+		p, err = s.startHost(cfg)
 	}
-
-	if err := p.Start(); err != nil {
+	if err != nil {
 		return nil, err
 	}
 	bp := &barPanel{panel: p, startedAt: time.Now(), done: make(chan struct{})}
@@ -437,8 +443,10 @@ func (s *supervisor) failed(name string) {
 // shutdown asks every panel to exit, then kills whatever is left. kitty is
 // started with Pdeathsig, so worst case a panel dies with the supervisor.
 func (s *supervisor) shutdown() {
-	// The shared instance goes last: closing it takes every panel with it,
-	// which would turn an orderly exit into a kill.
+	// Menu panels are windows in the instance too, so the pool goes first;
+	// the instance goes last, since closing it takes every panel with it and
+	// would turn an orderly exit into a kill.
+	s.panels.stop()
 	if s.host != nil {
 		defer func() {
 			s.host.Close()

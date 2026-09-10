@@ -194,6 +194,10 @@ func (b *Broker) Drop(output string) {
 // Rehost points the broker at a new source of panels and throws away every
 // panel the old one produced. Used when the shared kitty instance is
 // replaced: its panels died with it, so nothing here is worth keeping.
+//
+// A nil source suspends the pool. That is an instance that has gone away, or
+// one the first bar has yet to start: there is nowhere to put a panel, and
+// spawning one a process at a time is exactly what the instance avoids.
 func (b *Broker) Rehost(spawn func(outputs.Monitor) (*katnip.Panel, error)) {
 	b.mu.Lock()
 	b.spawn = spawn
@@ -246,7 +250,7 @@ func (b *Broker) Close() {
 // spawning in the background so it never blocks an open.
 func (b *Broker) ensure() {
 	b.mu.Lock()
-	if b.closed {
+	if b.closed || b.spawn == nil {
 		b.mu.Unlock()
 		return
 	}
@@ -288,7 +292,13 @@ func (b *Broker) ensure() {
 }
 
 func (b *Broker) warm(mon outputs.Monitor) (*Spare, error) {
-	return warmSpare(mon, b.spawn, b.ready)
+	b.mu.Lock()
+	spawn, ready := b.spawn, b.ready
+	b.mu.Unlock()
+	if spawn == nil {
+		return nil, errors.New("menus: no kitty instance to put a panel in")
+	}
+	return warmSpare(mon, spawn, ready)
 }
 
 // warmSpare spawns a menu host and waits for it to announce readiness.

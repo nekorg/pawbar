@@ -33,7 +33,11 @@ type panelBroker struct {
 // startBroker begins serving panels. A supervisor that cannot listen keeps
 // running: bars fall back to spawning their own panels, which is slower but
 // not broken.
-func startBroker(log zerolog.Logger, spawn func(outputs.Monitor) (*katnip.Panel, error)) *panelBroker {
+//
+// shared says panels live in one kitty instance, which the first bar has yet
+// to start. The pool waits for it rather than spawning a process per spare,
+// which is the thing the instance exists to avoid.
+func startBroker(log zerolog.Logger, shared bool, spawn func(outputs.Monitor) (*katnip.Panel, error)) *panelBroker {
 	l, err := lease.Listen()
 	if err != nil {
 		log.Warn().Msgf("menus: cannot serve menu panels (%v); each bar will spawn its own", err)
@@ -41,19 +45,21 @@ func startBroker(log zerolog.Logger, spawn func(outputs.Monitor) (*katnip.Panel,
 	}
 	b := &panelBroker{log: log, listener: l, broker: menus.NewBroker()}
 	logging.Go("supervisor.broker", b.serve)
-	// Warm the first spares on the primary output, so even the first menu of
-	// the session opens without paying the panel spawn cost.
-	if spawn != nil {
+	switch {
+	case spawn != nil || shared:
 		b.broker.Rehost(spawn)
-	} else {
+	default:
+		// Warm the first spares on the primary output, so even the first
+		// menu of the session opens without paying the spawn cost.
 		b.broker.Warm()
 	}
 	return b
 }
 
-// rehost moves the pool to a new shared instance after the old one died.
+// rehost points the pool at a new shared instance, or at none: a nil source
+// suspends it until there is an instance to put a panel in again.
 func (b *panelBroker) rehost(spawn func(outputs.Monitor) (*katnip.Panel, error)) {
-	if b == nil || spawn == nil {
+	if b == nil {
 		return
 	}
 	b.broker.Rehost(spawn)
