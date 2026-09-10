@@ -38,6 +38,9 @@ bar:
   strict: false
   defaults: true
   outputs: all
+  exit_without_monitors: false
+  kitty: {}
+  menus: {}
 ```
 
 - `gap`: inserted between adjacent modules on a side, so you don't have to
@@ -55,6 +58,12 @@ bar:
 - `defaults`: set `false` to drop every module's
   [shipped defaults](#shipped-defaults) bar-wide.
 - `outputs`: which monitors get a bar. See [Monitors](#monitors).
+- `exit_without_monitors`: leave instead of waiting when the compositor
+  reports no monitors at all. See [Monitors](#monitors).
+- `kitty`: how many kitty processes the bars and menus run in, and how they
+  are configured. See [Processes and memory](#processes-and-memory).
+- `menus`: how many menu panels are kept warm. See
+  [Processes and memory](#processes-and-memory).
 
 # `theme`
 
@@ -99,6 +108,15 @@ Names are the compositor's output names (`hyprctl monitors`,
 plugged in is not an error: its bar appears when it does. `pawbar
 --output NAME` overrides the selection for one run, and can be repeated.
 
+With no monitors at all (every screen unplugged, a closed lid) pawbar
+waits. It holds no bars and no kitty, just the supervisor, and rebuilds
+everything when a monitor comes back. If you would rather it left, set
+`bar.exit_without_monitors: true` (or pass `--exit-without-monitors`) and
+it exits instead; use it when something else starts pawbar per seat and
+would start it again. `outputs: none` is not that case: it is a config
+that asks for no bars, so pawbar keeps running and honours the next
+reload.
+
 ## Per-output overrides
 
 The top-level `outputs:` section tailors the bar on one monitor. Each
@@ -133,6 +151,65 @@ Modules that mean something different per screen follow the monitor their
 bar is on: [`ws`](/docs/modules#ws) shows that monitor's workspaces and
 [`title`](/docs/modules#title) the window it is showing. Menus open on
 the monitor they were clicked from, at that monitor's scale.
+
+# Processes and memory
+
+Every bar and every menu panel is a kitty desktop panel, and they all live
+in one kitty process. That process is not started separately: the first bar
+is it, and it exits with the last one. A panel inside it costs a few
+megabytes of kitty plus the pawbar process drawing in it, which is around
+35 MB, so the memory pawbar uses is roughly one kitty plus one small
+process per panel on screen.
+
+Menus are the reason that matters. Spawning a panel to open a menu is slow
+enough to feel, so pawbar keeps some warm, off-screen and ready, and
+reuses them: a menu opens instantly out of the pool, and closing it parks
+the panel rather than throwing it away. The pool is what that memory buys.
+
+```yaml
+bar:
+  kitty:
+    host: own          # own (default) | none, a kitty process per panel
+    config: inherit    # inherit (default) | none | /path/to/kitty.conf
+    overrides: []      # extra kitty -o settings for the instance
+    command: kitty     # the kitty binary to run
+  menus:
+    target: 2          # warm panels one monitor wants
+    max: 4             # cap for the whole desktop; omit to work it out
+```
+
+- `host`: `none` gives every panel its own kitty process, which is how
+  pawbar used to work. A kitty process costs a couple of hundred megabytes,
+  so on a two-monitor desktop with a warm pool that is the difference
+  between one of them and five.
+- `config`: the shared instance reads your `kitty.conf` by default, so
+  menus use your fonts. `none` ignores it and uses kitty's built-in
+  defaults, which is faster to start and looks nothing like your terminal.
+- `overrides`: extra `-o` settings for the instance. Panels sharing a kitty
+  process cannot carry their own, so anything a bar or a menu needs goes
+  here.
+
+`menus.target` is how many warm panels one monitor wants: two, so that a
+menu and the submenu behind it both open instantly. `menus.max` caps the
+whole desktop, because a panel is pinned to one monitor when it is created
+and only ever opens there, so covering every monitor means paying for every
+monitor.
+
+Panels are spread by intent: the monitor the pointer is on, or that a menu
+was last opened on, is filled to `target` first, and what is left of the
+budget hedges the others one panel at a time. With two monitors and
+`target: 2`:
+
+| `max` | 0 | 1 | 2 | 3 | 4 | 5+ |
+|---|---|---|---|---|---|---|
+| pointed at | 0 | 1 | 2 | 2 | 2 | 2 |
+| the other | 0 | 0 | 0 | 1 | 2 | 2 |
+
+Omitting `max` gives `target + monitors - 1`: the pointed-at monitor's
+whole chain, plus one panel on each of the others, so every bar's first
+menu opens warm. `max: 0` turns pooling off entirely; menus still open,
+they just pay the spawn each time. A leased panel counts against the
+budget, so `max` is a cap on the panels that exist, not just the idle ones.
 
 # Modules
 
