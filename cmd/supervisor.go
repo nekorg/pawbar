@@ -109,8 +109,10 @@ type supervisor struct {
 	// it at the top of its next turn.
 	quit bool
 
-	// kitty decides whether panels share one kitty process.
+	// kitty decides whether panels share one kitty process, menus how many
+	// of them are kept warm.
 	kitty config.KittySettings
+	menus menus.PoolSettings
 	// host is the shared instance every panel lives in, nil when panels
 	// get a process each or when the instance has yet to come up.
 	host *katnip.Host
@@ -126,12 +128,13 @@ type supervisor struct {
 	startPanel  func(name string) (*barPanel, error)
 }
 
-func newSupervisor(log zerolog.Logger, sel config.OutputSel, flagSel *config.OutputSel, kitty config.KittySettings) *supervisor {
+func newSupervisor(log zerolog.Logger, sel config.OutputSel, flagSel *config.OutputSel, bar config.BarSettings) *supervisor {
 	s := &supervisor{
 		log:       log,
 		flagSel:   flagSel,
 		sel:       sel,
-		kitty:     kitty,
+		kitty:     bar.Kitty,
+		menus:     menus.PoolSettings{Target: bar.Menus.Target, Max: bar.Menus.PoolMax()},
 		running:   make(map[string]*barPanel),
 		fails:     make(map[string]int),
 		retryAt:   make(map[string]time.Time),
@@ -160,7 +163,7 @@ func (s *supervisor) run() int {
 
 	// There is no instance yet: the first bar brings it up. Until then the
 	// pool has nowhere to put a spare, which is what a nil spawner means.
-	s.panels = startBroker(s.log, s.kitty.Shared(), s.spawner())
+	s.panels = startBroker(s.log, s.kitty.Shared(), s.menus)
 
 	tick := time.NewTicker(pollInterval)
 	defer tick.Stop()
@@ -297,6 +300,7 @@ func (s *supervisor) reconcile() {
 		if s.queryFails >= fallbackAfter && len(s.running) == 0 {
 			s.log.Warn().Msgf("monitors: unavailable (%v); starting one unpinned bar", err)
 			s.spawn(unpinned)
+			s.panels.setOutputs([]string{unpinned})
 		}
 		return
 	}
@@ -336,9 +340,6 @@ func (s *supervisor) reconcile() {
 		} else {
 			s.log.Info().Msgf("%s: no longer selected, stopping its bar", name)
 		}
-		// Its warm menu panels go with it: they are pinned to that output and
-		// carry the geometry and scale it had.
-		s.panels.dropOutput(name)
 		s.stop(name, bp)
 	}
 
@@ -355,6 +356,16 @@ func (s *supervisor) reconcile() {
 		}
 		s.spawn(name)
 	}
+
+	// The pool follows the bars: a spare is pinned to its output and
+	// carries the geometry and scale that output had when it warmed.
+	bars := make([]string, 0, len(s.running))
+	for _, name := range connected {
+		if s.running[name] != nil {
+			bars = append(bars, name)
+		}
+	}
+	s.panels.setOutputs(bars)
 
 	// Nothing is left to hold the instance open, and nothing left for it to
 	// do. Close it rather than wait for it to work that out, and let the

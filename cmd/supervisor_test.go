@@ -27,7 +27,7 @@ func newFake(t *testing.T, sel config.OutputSel, connected ...string) *fakeSuper
 	f := &fakeSupervisor{
 		// The fake has no kitty at all, so no shared instance either.
 		supervisor: newSupervisor(zerolog.New(io.Discard), sel, nil,
-			config.KittySettings{Host: config.KittyHostNone}),
+			config.BarSettings{Kitty: config.KittySettings{Host: config.KittyHostNone}}),
 		connected: connected,
 	}
 	f.listOutputs = func() ([]string, error) {

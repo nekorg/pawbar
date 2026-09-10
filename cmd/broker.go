@@ -21,9 +21,9 @@ import (
 )
 
 // panelBroker serves the menu panels for every bar. Bars do not pool panels
-// themselves: a panel is pinned to one output for its whole life, and with a
-// single mouse cursor only the bar under it can be clicked next, so two warm
-// spares cover the whole desktop instead of two per monitor.
+// themselves: a panel is pinned to one output for its whole life, so the pool
+// has to be spread across the monitors by intent, which only something that
+// sees every bar can do.
 type panelBroker struct {
 	log      zerolog.Logger
 	listener net.Listener
@@ -37,21 +37,16 @@ type panelBroker struct {
 // shared says panels live in one kitty instance, which the first bar has yet
 // to start. The pool waits for it rather than spawning a process per spare,
 // which is the thing the instance exists to avoid.
-func startBroker(log zerolog.Logger, shared bool, spawn func(outputs.Monitor) (*katnip.Panel, error)) *panelBroker {
+func startBroker(log zerolog.Logger, shared bool, pool menus.PoolSettings) *panelBroker {
 	l, err := lease.Listen()
 	if err != nil {
 		log.Warn().Msgf("menus: cannot serve menu panels (%v); each bar will spawn its own", err)
 		return nil
 	}
-	b := &panelBroker{log: log, listener: l, broker: menus.NewBroker()}
+	b := &panelBroker{log: log, listener: l, broker: menus.NewBroker(pool)}
 	logging.Go("supervisor.broker", b.serve)
-	switch {
-	case spawn != nil || shared:
-		b.broker.Rehost(spawn)
-	default:
-		// Warm the first spares on the primary output, so even the first
-		// menu of the session opens without paying the spawn cost.
-		b.broker.Warm()
+	if shared {
+		b.broker.Rehost(nil)
 	}
 	return b
 }
@@ -131,11 +126,12 @@ func (b *panelBroker) session(conn net.Conn) {
 	}
 }
 
-// dropOutput reclaims the spares warmed for a monitor that is no longer
-// there; they carry its old geometry and scale.
-func (b *panelBroker) dropOutput(name string) {
+// setOutputs tells the pool which monitors have a bar, which is what it
+// spreads the spares over. Spares anywhere else are reclaimed: the monitor is
+// gone, or nobody can click the bar that would open them.
+func (b *panelBroker) setOutputs(names []string) {
 	if b != nil {
-		b.broker.Drop(name)
+		b.broker.SetOutputs(names)
 	}
 }
 

@@ -8,6 +8,7 @@ package menus
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,16 +19,11 @@ import (
 	"github.com/nekorg/pawbar/pkg/menus/wire"
 )
 
-// poolTarget is how many warm spares to keep hot. One spare keeps the
-// invariant "live panels = visible + 1": opening a menu (or submenu)
-// consumes the spare and refills in the background. The second covers the
-// submenu that follows without waiting for that refill.
-//
-// This is a desktop-wide number, not a per-monitor one. A panel's output is
-// fixed when kitty creates it, so a spare only ever serves the monitor it
-// was warmed on — but there is one mouse cursor, so only the bar under it
-// can be clicked next, and the spares live there.
-const poolTarget = 2
+// settleDelay coalesces plan changes. At the default budget crossing a
+// screen edge moves a spare, and a pointer dragged along the edge would
+// otherwise move one per event. Nothing here is latency critical: a menu
+// that misses the pool spawns on its own path.
+const settleDelay = 150 * time.Millisecond
 
 // readyTimeout bounds waiting for a freshly spawned spare to warm up
 // (kitty spawn + vaxis handshake + off-screen map). Generous; the wait
@@ -53,9 +49,16 @@ type Broker struct {
 	idle    map[string][]*Spare
 	warming map[string]int
 	leased  map[uint64]*Spare
-	warmFor string // the output the spares live on
 	nextID  uint64
 	closed  bool
+
+	pool PoolSettings
+	// bars is every output with a bar on it, in compositor order; recent
+	// is the same outputs ranked by intent, most recent first.
+	bars   []string
+	recent []string
+	want   map[string]int
+	settle *time.Timer
 
 	// Seams for tests, which have neither a compositor nor a kitty.
 	spawn    func(outputs.Monitor) (*katnip.Panel, error)
@@ -63,47 +66,80 @@ type Broker struct {
 	monitors func() ([]outputs.Monitor, error)
 }
 
-func NewBroker() *Broker {
+func NewBroker(pool PoolSettings) *Broker {
 	return &Broker{
 		idle:     make(map[string][]*Spare),
 		warming:  make(map[string]int),
 		leased:   make(map[uint64]*Spare),
+		want:     make(map[string]int),
+		pool:     pool,
 		spawn:    spawnHostPanel,
 		monitors: outputs.GetMonitors,
 	}
 }
 
-// Warm starts the pool where the pointer has not been reported yet: the
-// primary output, which is where a compositor puts an unpinned panel too.
-func (b *Broker) Warm() { b.ensure() }
+// SetOutputs names the monitors that have a bar. Spares anywhere else are
+// killed: a panel is pinned to its output for life, so one on a monitor
+// nobody can click is a process spent on nothing.
+func (b *Broker) SetOutputs(names []string) {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.bars = slices.Clone(names)
 
-// WarmFor moves the spares to output, which is where the pointer now is.
-// Spares warmed for anywhere else are killed: they cannot be revealed on
-// another monitor, so holding them only costs a kitty process each.
+	var stale []*Spare
+	for output, queue := range b.idle {
+		if slices.Contains(b.bars, output) {
+			continue
+		}
+		stale = append(stale, queue...)
+		delete(b.idle, output)
+	}
+	b.recent = slices.DeleteFunc(b.recent, func(o string) bool {
+		return !slices.Contains(b.bars, o)
+	})
+	b.mu.Unlock()
+
+	for _, sp := range stale {
+		go sp.kill()
+	}
+	b.kick()
+}
+
+// WarmFor records that the pointer is on output, which is the pool's cue to
+// move the spares there.
 func (b *Broker) WarmFor(output string) {
+	b.touch(output)
+	b.kick()
+}
+
+// touch fronts the output the user just showed intent for. Leaving one never
+// demotes it: with the pointer mid-screen, the bar it just left is still the
+// likeliest next click.
+func (b *Broker) touch(output string) {
 	if output == "" {
 		return
 	}
 	b.mu.Lock()
-	if b.closed || b.warmFor == output {
-		b.mu.Unlock()
-		b.ensure()
-		return
+	defer b.mu.Unlock()
+	recent := make([]string, 0, len(b.recent)+1)
+	recent = append(recent, output)
+	for _, o := range b.recent {
+		if o != output {
+			recent = append(recent, o)
+		}
 	}
-	b.warmFor = output
-	stale := b.takeIdleElsewhere()
-	b.mu.Unlock()
-
-	for _, sp := range stale {
-		sp.kill()
-	}
-	b.ensure()
+	b.recent = recent
 }
 
 // Acquire leases a warm panel on output and returns its lease id and the
 // stream the bar should attach to. An empty pool (or a spare warmed before
 // the monitor changed mode) costs a kitty spawn on this path.
 func (b *Broker) Acquire(output string) (uint64, string, error) {
+	// Opening a menu is the strongest statement of intent there is.
+	b.touch(output)
 	mon, ok := b.monitor(output)
 
 	b.mu.Lock()
@@ -151,7 +187,7 @@ func (b *Broker) Acquire(output string) (uint64, string, error) {
 	id, path := sp.id, sp.panel.ShmPath()
 	b.mu.Unlock()
 
-	b.ensure()
+	b.kick()
 	return id, path, nil
 }
 
@@ -172,22 +208,6 @@ func (b *Broker) Release(id uint64) {
 func (b *Broker) ReleaseAll(ids []uint64) {
 	for _, id := range ids {
 		b.Release(id)
-	}
-}
-
-// Drop kills the spares warmed for an output that is no longer usable (a
-// disconnected monitor); a returning monitor gets freshly warmed ones.
-func (b *Broker) Drop(output string) {
-	b.mu.Lock()
-	stale := b.idle[output]
-	delete(b.idle, output)
-	if b.warmFor == output {
-		b.warmFor = ""
-	}
-	b.mu.Unlock()
-
-	for _, sp := range stale {
-		sp.kill()
 	}
 }
 
@@ -216,7 +236,7 @@ func (b *Broker) Rehost(spawn func(outputs.Monitor) (*katnip.Panel, error)) {
 	for _, sp := range stale {
 		sp.free()
 	}
-	b.ensure()
+	b.kick()
 }
 
 // Close kills every panel the broker owns. Leased ones go too: the bars are
@@ -224,6 +244,9 @@ func (b *Broker) Rehost(spawn func(outputs.Monitor) (*katnip.Panel, error)) {
 func (b *Broker) Close() {
 	b.mu.Lock()
 	b.closed = true
+	if b.settle != nil {
+		b.settle.Stop()
+	}
 	var all []*Spare
 	for _, queue := range b.idle {
 		all = append(all, queue...)
@@ -246,49 +269,112 @@ func (b *Broker) Close() {
 	wg.Wait()
 }
 
-// ensure tops the pool up to poolTarget on the output the pointer is on,
-// spawning in the background so it never blocks an open.
-func (b *Broker) ensure() {
+// kick asks for a rebalance once the plan has stopped moving.
+func (b *Broker) kick() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return
+	}
+	if b.settle == nil {
+		b.settle = time.AfterFunc(settleDelay, b.rebalance)
+		return
+	}
+	b.settle.Reset(settleDelay)
+}
+
+// rebalance brings the pool in line with the current plan: reclaim what an
+// output no longer deserves, spawn what it lacks, in the background so it
+// never blocks an open.
+//
+// Draining and filling off one snapshot can briefly overshoot the budget by
+// panels that are still shutting down. That beats leaving the monitor under
+// the pointer with nothing.
+func (b *Broker) rebalance() {
 	b.mu.Lock()
 	if b.closed || b.spawn == nil {
 		b.mu.Unlock()
 		return
 	}
-	if b.warmFor == "" {
-		b.warmFor = b.primary()
+	order := b.priority()
+	b.want = plan(order, b.pool.Target, b.pool.Max)
+
+	var stale []*Spare
+	for output, queue := range b.idle {
+		surplus := min(len(queue)+b.warming[output]-b.want[output], len(queue))
+		if surplus <= 0 {
+			continue
+		}
+		// Oldest first: a spare warmed more recently is the more likely to
+		// still match its output's mode.
+		stale = append(stale, queue[:surplus]...)
+		b.idle[output] = slices.Clone(queue[surplus:])
 	}
-	output := b.warmFor
-	need := poolTarget - len(b.idle[output]) - b.warming[output]
-	if output == "" || need <= 0 {
-		b.mu.Unlock()
-		return
+
+	need := make(map[string]int, len(order))
+	for _, output := range order {
+		if n := b.want[output] - len(b.idle[output]) - b.warming[output]; n > 0 {
+			need[output] = n
+			b.warming[output] += n
+		}
 	}
-	b.warming[output] += need
 	b.mu.Unlock()
 
-	mon, _ := b.monitor(output)
-	for range need {
-		go func() {
-			sp, err := b.warm(mon)
-
-			b.mu.Lock()
-			b.warming[output]--
-			keep := err == nil && !b.closed && b.warmFor == output
-			if keep {
-				b.idle[output] = append(b.idle[output], sp)
-			}
-			b.mu.Unlock()
-
-			switch {
-			case err != nil:
-				logging.Log.Warn().Msgf("menus: warming a spare on %s: %v", output, err)
-			case !keep:
-				// The pointer moved on (or we are shutting down) while this
-				// one was spawning; it can only ever open on its own output.
-				sp.kill()
-			}
-		}()
+	for _, sp := range stale {
+		go sp.kill()
 	}
+	for output, n := range need {
+		mon, _ := b.monitor(output)
+		for range n {
+			go b.warmOne(output, mon)
+		}
+	}
+}
+
+// warmOne spawns a single spare and files it, unless the plan moved on while
+// it was starting; it can only ever open on its own output.
+func (b *Broker) warmOne(output string, mon outputs.Monitor) {
+	sp, err := b.warm(mon)
+
+	b.mu.Lock()
+	b.warming[output]--
+	keep := err == nil && !b.closed && len(b.idle[output]) < b.want[output]
+	if keep {
+		b.idle[output] = append(b.idle[output], sp)
+	}
+	b.mu.Unlock()
+
+	switch {
+	case err != nil:
+		logging.Log.Warn().Msgf("menus: warming a spare on %s: %v", output, err)
+	case !keep:
+		sp.kill()
+	}
+}
+
+// priority ranks the outputs the pool may warm on: most recent intent first,
+// then the bars nobody has pointed at yet, primary first.
+//
+// Caller holds b.mu.
+func (b *Broker) priority() []string {
+	order := make([]string, 0, len(b.bars))
+	for _, o := range b.recent {
+		if slices.Contains(b.bars, o) {
+			order = append(order, o)
+		}
+	}
+	rest := make([]string, 0, len(b.bars))
+	for _, o := range b.bars {
+		if !slices.Contains(order, o) {
+			rest = append(rest, o)
+		}
+	}
+	if primary := b.primary(); primary != "" {
+		if i := slices.Index(rest, primary); i > 0 {
+			rest = slices.Insert(slices.Delete(rest, i, i+1), 0, primary)
+		}
+	}
+	return append(order, rest...)
 }
 
 func (b *Broker) warm(mon outputs.Monitor) (*Spare, error) {
@@ -354,20 +440,6 @@ func (b *Broker) primary() string {
 		}
 	}
 	return monitors[0].Name
-}
-
-// takeIdleElsewhere empties every idle queue but the one being warmed.
-// Caller holds b.mu.
-func (b *Broker) takeIdleElsewhere() []*Spare {
-	var stale []*Spare
-	for output, queue := range b.idle {
-		if output == b.warmFor {
-			continue
-		}
-		stale = append(stale, queue...)
-		delete(b.idle, output)
-	}
-	return stale
 }
 
 // awaitReady blocks until the spare sends MsgReady, or the wire ends. The

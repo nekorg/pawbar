@@ -53,6 +53,8 @@ type BarSettings struct {
 	Outputs OutputSel `yaml:"outputs"`
 	// Kitty tunes the kitty processes the bars and menus draw in.
 	Kitty KittySettings `yaml:"kitty"`
+	// Menus sizes the pool of pre-warmed menu panels.
+	Menus MenuSettings `yaml:"menus"`
 	// ExitWithoutMonitors makes pawbar leave when the compositor reports
 	// no monitors, instead of waiting for one to appear.
 	ExitWithoutMonitors bool `yaml:"exit_without_monitors"`
@@ -77,6 +79,42 @@ type KittySettings struct {
 	Overrides []string `yaml:"overrides"`
 	// Command is the kitty binary to run.
 	Command string `yaml:"command"`
+}
+
+// MenuSettings size the pool of pre-warmed menu panels. A menu opens
+// instantly out of the pool and slowly without one, so this trades memory
+// for the click.
+type MenuSettings struct {
+	// Target is how many warm panels one monitor wants: one for the menu,
+	// one for the submenu that opens behind it.
+	Target int `yaml:"target"`
+	// Max caps the whole desktop. Unset spreads a full chain on the
+	// monitor the pointer is on and one spare on each of the others; 0
+	// turns pooling off and every menu cold starts.
+	Max *int `yaml:"max"`
+}
+
+func (m *MenuSettings) fillDefaults() {
+	if m.Target == 0 {
+		m.Target = 2
+	}
+}
+
+func (m *MenuSettings) validate(n *yaml.Node, issues *Issues) {
+	if m.Target < 0 {
+		issues.add("bar.menus.target", n, "cannot be negative, got %d", m.Target)
+	}
+	if m.Max != nil && *m.Max < 0 {
+		issues.add("bar.menus.max", n, "cannot be negative, got %d", *m.Max)
+	}
+}
+
+// PoolMax is max as the pool wants it: negative for the automatic spread.
+func (m MenuSettings) PoolMax() int {
+	if m.Max == nil {
+		return -1
+	}
+	return *m.Max
 }
 
 // Shared reports whether panels share one kitty process.
@@ -137,10 +175,12 @@ func (b *BarSettings) fillDefaults() {
 	}
 	b.Outputs.fillDefaults()
 	b.Kitty.fillDefaults()
+	b.Menus.fillDefaults()
 }
 
 func (b *BarSettings) validate(n *yaml.Node, issues *Issues) {
 	b.Kitty.validate(subNodeOr(n, "kitty", n), issues)
+	b.Menus.validate(subNodeOr(n, "menus", n), issues)
 	b.Outputs.validate(subNodeOr(n, "outputs", n), issues)
 	if b.ShrinkMin < 1 {
 		issues.add("bar.shrink_min", n, "must be at least 1 column, got %d", b.ShrinkMin)

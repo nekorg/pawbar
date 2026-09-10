@@ -107,7 +107,7 @@ func supervise(flagSel *config.OutputSel, exitWithoutMonitors bool) int {
 	}
 	log.Info().Msgf("monitors: %s", sel)
 
-	s := newSupervisor(log, sel, flagSel, f.Bar.Kitty)
+	s := newSupervisor(log, sel, flagSel, f.Bar)
 	// The flag only ever turns waiting off, so it needs no "was it set"
 	// bookkeeping: either side asking to leave is enough.
 	s.exitWithoutMonitors = exitWithoutMonitors || f.Bar.ExitWithoutMonitors
