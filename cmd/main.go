@@ -30,6 +30,10 @@ import (
 
 func init() {
 	katnip.RegisterFunc("pawbar", mainLoop)
+	// The window that holds a shared kitty instance open. Registered
+	// before the menu host for the same reason it is registered at all:
+	// a matching identity runs its handler here and never returns.
+	registerAnchor()
 	// Register the generic menu-host identity last, so every menu kind is
 	// in the registry before a re-exec'd host dispatches on it. cmd's init
 	// runs after the menus/module packages it imports have registered.
@@ -88,17 +92,17 @@ func supervise(flagSel *config.OutputSel) int {
 
 	log := logging.Setup(os.Stderr)
 
-	sel := config.OutputSel{}
+	// The supervisor needs the bar-global settings even when --output
+	// pins the selection: how many kitty processes to run is in there too.
+	f, issues := config.Read(configPath())
+	if issues.Fatal() {
+		// The panels report config problems in full; the supervisor
+		// only needs to know which monitors to cover.
+		log.Warn().Msg("config: unreadable, putting a bar on every monitor")
+	}
+	sel := f.Bar.Outputs
 	if flagSel != nil {
 		sel = *flagSel
-	} else {
-		f, issues := config.Read(configPath())
-		if issues.Fatal() {
-			// The panels report config problems in full; the supervisor
-			// only needs to know which monitors to cover.
-			log.Warn().Msg("config: unreadable, putting a bar on every monitor")
-		}
-		sel = f.Bar.Outputs
 	}
 	if sel.Empty() {
 		log.Error().Msg("no monitors selected (bar.outputs: none), nothing to do")
@@ -106,32 +110,17 @@ func supervise(flagSel *config.OutputSel) int {
 	}
 	log.Info().Msgf("monitors: %s", sel)
 
-	return newSupervisor(log, sel, flagSel).run()
+	return newSupervisor(log, sel, flagSel, f.Bar.Kitty).run()
 }
 
 // barPanelConfig is the kitty panel every bar runs in, pinned to output.
+// The kitty tuning is not here: it is instance-wide (see hostOverrides),
+// because a panel sharing an instance cannot carry its own.
 func barPanelConfig(output string) katnip.Config {
 	return katnip.Config{
 		Size:        katnip.Vector{X: 0, Y: 1},
 		FocusPolicy: katnip.FocusNotAllowed,
 		OutputName:  output,
-		KittyOverrides: []string{
-			"font_size=12",
-			"cursor_trail=0",
-			"paste_actions=replace-dangerous-control-codes",
-			"map kitty_mod+equal  no_op",
-			"map kitty_mod+plus   no_op",
-			"map kitty_mod+kp_add no_op",
-			"map cmd+plus         no_op",
-			"map cmd+equal        no_op",
-			"map shift+cmd+equal  no_op",
-			"map kitty_mod+minus       no_op",
-			"map kitty_mod+kp_subtract no_op",
-			"map cmd+minus             no_op",
-			"map shift+cmd+minus       no_op",
-			"map kitty_mod+backspace no_op",
-			"map cmd+0               no_op",
-		},
 	}
 }
 
@@ -243,6 +232,10 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 		log.Error().Msgf("initializing vaxis: %v", err)
 		return 1
 	}
+
+	// A bar drives its own kitty panel over its terminal, so the escape
+	// sequences go through vaxis rather than around it.
+	kitty.SetWriter(vx.ControlWriter())
 
 	defer func() {
 		p := recover()

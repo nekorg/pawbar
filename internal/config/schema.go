@@ -51,6 +51,71 @@ type BarSettings struct {
 	Defaults *bool `yaml:"defaults"`
 	// Outputs selects which monitors get a bar (default: all of them).
 	Outputs OutputSel `yaml:"outputs"`
+	// Kitty tunes the kitty processes the bars and menus draw in.
+	Kitty KittySettings `yaml:"kitty"`
+}
+
+// KittySettings decide how many kitty processes pawbar runs.
+//
+// A kitty process costs a couple of hundred megabytes, and with a bar per
+// monitor plus pooled menu panels that adds up fast. `host: own` puts every
+// panel in one hidden instance instead, where a panel costs a few megabytes.
+type KittySettings struct {
+	// Host is "own" (one shared instance, the default) or "none" (a kitty
+	// process per panel, how pawbar used to work).
+	Host string `yaml:"host"`
+	// Config is the kitty.conf the shared instance uses: "inherit" for the
+	// user's own (the default), "none" for kitty's built-in defaults, or a
+	// path. Only used when Host is "own"; panels in a shared instance
+	// cannot have their own config.
+	Config string `yaml:"config"`
+	// Overrides are extra kitty settings (-o) for the shared instance, on
+	// top of the ones pawbar needs.
+	Overrides []string `yaml:"overrides"`
+	// Command is the kitty binary to run.
+	Command string `yaml:"command"`
+}
+
+// Shared reports whether panels share one kitty process.
+func (k KittySettings) Shared() bool { return k.Host == KittyHostOwn }
+
+const (
+	KittyHostOwn  = "own"
+	KittyHostNone = "none"
+)
+
+func (k *KittySettings) fillDefaults() {
+	if k.Host == "" {
+		k.Host = KittyHostOwn
+	}
+	if k.Config == "" {
+		k.Config = "inherit"
+	}
+	if k.Command == "" {
+		k.Command = "kitty"
+	}
+}
+
+func (k *KittySettings) validate(n *yaml.Node, issues *Issues) {
+	switch k.Host {
+	case KittyHostOwn, KittyHostNone:
+	default:
+		issues.add("bar.kitty.host", n,
+			`invalid host %q, valid options are: ["own", "none"]`, k.Host)
+	}
+}
+
+// ConfigFile is what to pass kitty as --config: empty to inherit the user's
+// kitty.conf, "NONE" to ignore it, or a path.
+func (k KittySettings) ConfigFile() string {
+	switch k.Config {
+	case "inherit", "":
+		return ""
+	case "none":
+		return "NONE"
+	default:
+		return k.Config
+	}
 }
 
 func (b *BarSettings) fillDefaults() {
@@ -68,9 +133,11 @@ func (b *BarSettings) fillDefaults() {
 		b.ShrinkMin = 3
 	}
 	b.Outputs.fillDefaults()
+	b.Kitty.fillDefaults()
 }
 
 func (b *BarSettings) validate(n *yaml.Node, issues *Issues) {
+	b.Kitty.validate(subNodeOr(n, "kitty", n), issues)
 	b.Outputs.validate(subNodeOr(n, "outputs", n), issues)
 	if b.ShrinkMin < 1 {
 		issues.add("bar.shrink_min", n, "must be at least 1 column, got %d", b.ShrinkMin)

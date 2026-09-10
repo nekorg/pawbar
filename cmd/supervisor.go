@@ -22,6 +22,7 @@ import (
 	"github.com/nekorg/pawbar/internal/core"
 	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/internal/monitor"
+	"github.com/nekorg/pawbar/pkg/menus"
 	"github.com/rs/zerolog"
 )
 
@@ -101,20 +102,34 @@ type supervisor struct {
 	// be opened, which leaves each bar spawning its own.
 	panels *panelBroker
 
+	// kitty decides whether panels share one kitty process.
+	kitty config.KittySettings
+	// host is the shared instance every panel lives in, nil when panels
+	// get a process each or when the instance has yet to come up.
+	host *katnip.Host
+	// hostFails/hostRetryAt back off a host that will not start, the same
+	// way a panel that will not start is backed off.
+	hostFails   int
+	hostRetryAt time.Time
+	// hostExits carries the shared instance's death.
+	hostExits chan struct{}
+
 	// Seams for tests, which have neither a compositor nor a kitty.
 	listOutputs func() ([]string, error)
 	startPanel  func(name string) (*barPanel, error)
 }
 
-func newSupervisor(log zerolog.Logger, sel config.OutputSel, flagSel *config.OutputSel) *supervisor {
+func newSupervisor(log zerolog.Logger, sel config.OutputSel, flagSel *config.OutputSel, kitty config.KittySettings) *supervisor {
 	s := &supervisor{
-		log:     log,
-		flagSel: flagSel,
-		sel:     sel,
-		running: make(map[string]*barPanel),
-		fails:   make(map[string]int),
-		retryAt: make(map[string]time.Time),
-		exits:   make(chan panelExit, 4),
+		log:       log,
+		flagSel:   flagSel,
+		sel:       sel,
+		kitty:     kitty,
+		running:   make(map[string]*barPanel),
+		fails:     make(map[string]int),
+		retryAt:   make(map[string]time.Time),
+		exits:     make(chan panelExit, 4),
+		hostExits: make(chan struct{}, 1),
 	}
 	s.listOutputs = connectedOutputs
 	s.startPanel = s.startKitty
@@ -136,7 +151,11 @@ func (s *supervisor) run() int {
 		s.log.Warn().Msgf("config: hot reload of the output selection disabled: %v", err)
 	}
 
-	s.panels = startBroker(s.log)
+	// The shared instance has to exist before anything can be put in it,
+	// including the broker's first spares.
+	s.ensureHost()
+
+	s.panels = startBroker(s.log, s.spawner())
 	defer s.panels.stop()
 
 	tick := time.NewTicker(pollInterval)
@@ -153,6 +172,10 @@ func (s *supervisor) run() int {
 			s.handleExit(e)
 			s.reconcile()
 
+		case <-s.hostExits:
+			s.dropHost()
+			s.reconcile()
+
 		case <-reloadCh:
 			if s.reloadSelection() {
 				s.reconcile()
@@ -163,6 +186,73 @@ func (s *supervisor) run() int {
 			s.shutdown()
 			return 0
 		}
+	}
+}
+
+// spawner is where menu panels come from: the shared instance, or a kitty
+// process each. Nil means the default, which is a process each.
+func (s *supervisor) spawner() func(outputs.Monitor) (*katnip.Panel, error) {
+	if s.host == nil {
+		return nil
+	}
+	return menus.Spawner(s.host)
+}
+
+// ensureHost brings up the shared kitty instance if there should be one and
+// there is not. It reports whether panels can be started.
+func (s *supervisor) ensureHost() bool {
+	if !s.kitty.Shared() {
+		return true
+	}
+	if s.host != nil {
+		return true
+	}
+	if time.Now().Before(s.hostRetryAt) {
+		return false
+	}
+
+	host, err := katnip.Spawn(hostConfig(s.kitty))
+	if err != nil {
+		s.hostFails++
+		backoff := min(respawnBase<<(s.hostFails-1), respawnMax)
+		s.hostRetryAt = time.Now().Add(backoff)
+		s.log.Error().Msgf("kitty: cannot start the shared instance (%v); retrying in %v", err, backoff)
+		return false
+	}
+	s.hostFails = 0
+	s.host = host
+	s.log.Info().Msgf("kitty: shared instance up on %s", host.Socket())
+
+	anchor := host.Anchor()
+	logging.Go("supervisor.pump.host", func() { pump(anchor.Reader()) })
+	go func() {
+		anchor.Wait()
+		select {
+		case s.hostExits <- struct{}{}:
+		default:
+		}
+	}()
+	return true
+}
+
+// dropHost forgets an instance that died. Every panel went with it, so they
+// are all marked as gone on purpose: their exits are not failures of their
+// own and must not count against them.
+func (s *supervisor) dropHost() {
+	if s.host == nil {
+		return
+	}
+	s.log.Warn().Msg("kitty: the shared instance exited, taking every panel with it")
+
+	for name, bp := range s.running {
+		bp.stopped = true
+		delete(s.running, name)
+	}
+	s.host.Close()
+	s.host = nil
+
+	if s.ensureHost() {
+		s.panels.rehost(s.spawner())
 	}
 }
 
@@ -191,6 +281,9 @@ func (s *supervisor) reloadSelection() bool {
 // reconcile brings the running panels in line with the connected outputs
 // and the current selection.
 func (s *supervisor) reconcile() {
+	if !s.ensureHost() {
+		return // nowhere to put a panel yet
+	}
 	connected, err := s.listOutputs()
 	if err != nil {
 		s.queryFails++
@@ -266,10 +359,19 @@ func (s *supervisor) spawn(name string) {
 
 // startKitty launches the panel, pinned to its output both in kitty
 // (--output-name) and in the panel process's environment, and wires up its
-// log stream and reaper.
+// log stream and reaper. It goes into the shared instance when there is one,
+// and gets a kitty process of its own otherwise.
 func (s *supervisor) startKitty(name string) (*barPanel, error) {
-	p := katnip.NewPanel("pawbar", barPanelConfig(name))
-	p.Cmd.Env = monitor.WithOutput(p.Cmd.Env, name)
+	cfg := barPanelConfig(name)
+	cfg.Env = monitor.WithOutput(nil, name)
+
+	var p *katnip.Panel
+	if s.host != nil {
+		p = s.host.NewPanel("pawbar", cfg)
+	} else {
+		cfg.KittyOverrides = menus.PanelOverrides
+		p = katnip.NewPanel("pawbar", cfg)
+	}
 
 	if err := p.Start(); err != nil {
 		return nil, err
@@ -335,6 +437,15 @@ func (s *supervisor) failed(name string) {
 // shutdown asks every panel to exit, then kills whatever is left. kitty is
 // started with Pdeathsig, so worst case a panel dies with the supervisor.
 func (s *supervisor) shutdown() {
+	// The shared instance goes last: closing it takes every panel with it,
+	// which would turn an orderly exit into a kill.
+	if s.host != nil {
+		defer func() {
+			s.host.Close()
+			s.host = nil
+		}()
+	}
+
 	panels := make([]*barPanel, 0, len(s.running))
 	for name, bp := range s.running {
 		s.stop(name, bp)

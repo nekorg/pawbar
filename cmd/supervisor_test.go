@@ -25,8 +25,10 @@ type fakeSupervisor struct {
 func newFake(t *testing.T, sel config.OutputSel, connected ...string) *fakeSupervisor {
 	t.Helper()
 	f := &fakeSupervisor{
-		supervisor: newSupervisor(zerolog.New(io.Discard), sel, nil),
-		connected:  connected,
+		// The fake has no kitty at all, so no shared instance either.
+		supervisor: newSupervisor(zerolog.New(io.Discard), sel, nil,
+			config.KittySettings{Host: config.KittyHostNone}),
+		connected: connected,
 	}
 	f.listOutputs = func() ([]string, error) {
 		if f.listErr != nil {

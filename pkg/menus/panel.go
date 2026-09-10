@@ -12,10 +12,13 @@ import (
 	"github.com/nekorg/pawbar/internal/monitor"
 )
 
-// kittyOverrides is the one copy of the kitty tuning every menu panel
+// PanelOverrides is the one copy of the kitty tuning every menu panel
 // (and historically each menu package) needs: pinned font size so cell
 // metrics match the bar, no zoom/cursor noise, no dangerous paste.
-var kittyOverrides = []string{
+//
+// A panel with its own kitty process gets these as -o. Panels sharing one
+// instance cannot, so the supervisor puts them on the instance instead.
+var PanelOverrides = []string{
 	"font_size=12",
 	"cursor_trail=0",
 	"cursor_shape=beam",
@@ -54,7 +57,7 @@ const (
 	offScreenMargin = 2000
 )
 
-// spawnHostPanel starts a warm menu-host panel on mon: hidden, pinned to
+// panelConfig describes a warm menu-host panel on mon: hidden, pinned to
 // that output (so its cell scale matches the eventual on-screen scale even
 // while parked off it), parked past that output's right edge, with a
 // non-grabbing focus policy so an idle spare never steals the keyboard.
@@ -64,32 +67,56 @@ const (
 //
 // A zero mon means the monitor is unknown; the panel then lands wherever
 // the compositor puts it, parked far enough right to stay invisible.
-func spawnHostPanel(mon outputs.Monitor) (*katnip.Panel, error) {
+func panelConfig(mon outputs.Monitor) katnip.Config {
 	cfg := katnip.Config{
-		Position:       katnip.Vector{X: 100000, Y: 0}, // fallback park when the output is unknown
-		Size:           katnip.Vector{X: warmCols, Y: warmRows},
-		Edge:           katnip.EdgeNone,
-		Layer:          katnip.LayerTop,
-		FocusPolicy:    katnip.FocusNotAllowed,
-		ConfigFile:     "NONE",
-		StartAsHidden:  true,
-		KittyOverrides: kittyOverrides,
+		Position:    katnip.Vector{X: 100000, Y: 0}, // fallback park when the output is unknown
+		Size:        katnip.Vector{X: warmCols, Y: warmRows},
+		Edge:        katnip.EdgeNone,
+		Layer:       katnip.LayerTop,
+		FocusPolicy: katnip.FocusNotAllowed,
 	}
 	if mon.Name != "" {
 		cfg.OutputName = mon.Name
 		if mon.ScaledWidth > 0 {
 			cfg.Position.X = mon.ScaledWidth + offScreenMargin
 		}
+		// Spares are spawned by the supervisor, for every output rather
+		// than its own, so the host is told which monitor it is on
+		// instead of inheriting it.
+		cfg.Env = monitor.WithOutput(nil, mon.Name)
 	}
+	return cfg
+}
+
+// spawnHostPanel starts a menu host in its own kitty process. Used when
+// panels are not sharing an instance; see [Spawner] for the shared path.
+func spawnHostPanel(mon outputs.Monitor) (*katnip.Panel, error) {
+	cfg := panelConfig(mon)
+	cfg.ConfigFile = "NONE"
+	cfg.StartAsHidden = true
+	cfg.KittyOverrides = PanelOverrides
+
 	kn := katnip.NewPanel(hostInstance, cfg)
-	if mon.Name != "" {
-		// Spares are spawned by the supervisor, for every output rather than
-		// its own, so the host is told which monitor it is on instead of
-		// inheriting it.
-		kn.Cmd.Env = monitor.WithOutput(kn.Cmd.Env, mon.Name)
-	}
 	if err := kn.Start(); err != nil {
 		return nil, err
 	}
 	return kn, nil
+}
+
+// Spawner returns a spawn function that puts menu hosts in host's kitty
+// instance instead of giving each one its own process. The instance already
+// carries [PanelOverrides], so the panel needs none of its own.
+//
+// A shared panel cannot start hidden, since that is a property of the kitty
+// process rather than the window. It does not need to: a spare is parked past
+// its output's right edge, which is where the hidden ones map themselves
+// anyway.
+func Spawner(host *katnip.Host) func(outputs.Monitor) (*katnip.Panel, error) {
+	return func(mon outputs.Monitor) (*katnip.Panel, error) {
+		kn := host.NewPanel(hostInstance, panelConfig(mon))
+		if err := kn.Start(); err != nil {
+			return nil, err
+		}
+		return kn, nil
+	}
 }

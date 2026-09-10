@@ -11,7 +11,9 @@ import (
 	"io"
 	"net"
 
+	"github.com/codelif/outputs"
 	"github.com/fxamacker/cbor/v2"
+	"github.com/nekorg/katnip"
 	"github.com/nekorg/pawbar/internal/lease"
 	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/pkg/menus"
@@ -31,7 +33,7 @@ type panelBroker struct {
 // startBroker begins serving panels. A supervisor that cannot listen keeps
 // running: bars fall back to spawning their own panels, which is slower but
 // not broken.
-func startBroker(log zerolog.Logger) *panelBroker {
+func startBroker(log zerolog.Logger, spawn func(outputs.Monitor) (*katnip.Panel, error)) *panelBroker {
 	l, err := lease.Listen()
 	if err != nil {
 		log.Warn().Msgf("menus: cannot serve menu panels (%v); each bar will spawn its own", err)
@@ -40,9 +42,21 @@ func startBroker(log zerolog.Logger) *panelBroker {
 	b := &panelBroker{log: log, listener: l, broker: menus.NewBroker()}
 	logging.Go("supervisor.broker", b.serve)
 	// Warm the first spares on the primary output, so even the first menu of
-	// the session opens without paying the kitty spawn cost.
-	b.broker.Warm()
+	// the session opens without paying the panel spawn cost.
+	if spawn != nil {
+		b.broker.Rehost(spawn)
+	} else {
+		b.broker.Warm()
+	}
 	return b
+}
+
+// rehost moves the pool to a new shared instance after the old one died.
+func (b *panelBroker) rehost(spawn func(outputs.Monitor) (*katnip.Panel, error)) {
+	if b == nil || spawn == nil {
+		return
+	}
+	b.broker.Rehost(spawn)
 }
 
 func (b *panelBroker) serve() {

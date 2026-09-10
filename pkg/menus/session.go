@@ -267,6 +267,11 @@ func runHost(k *katnip.Kitty, rw io.ReadWriter) int {
 	}
 	defer vx.Close()
 
+	// The panel drives kitty over its own terminal, so the escape
+	// sequences have to go through vaxis rather than around it: a raw
+	// write to stdout can land inside a frame.
+	k.SetWriter(vx.ControlWriter())
+
 	fg := queryForeground(vx)
 
 	var enc *cbor.Encoder

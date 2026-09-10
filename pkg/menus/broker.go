@@ -191,6 +191,30 @@ func (b *Broker) Drop(output string) {
 	}
 }
 
+// Rehost points the broker at a new source of panels and throws away every
+// panel the old one produced. Used when the shared kitty instance is
+// replaced: its panels died with it, so nothing here is worth keeping.
+func (b *Broker) Rehost(spawn func(outputs.Monitor) (*katnip.Panel, error)) {
+	b.mu.Lock()
+	b.spawn = spawn
+	var stale []*Spare
+	for _, queue := range b.idle {
+		stale = append(stale, queue...)
+	}
+	for _, sp := range b.leased {
+		stale = append(stale, sp)
+	}
+	b.idle = make(map[string][]*Spare)
+	b.leased = make(map[uint64]*Spare)
+	clear(b.warming)
+	b.mu.Unlock()
+
+	for _, sp := range stale {
+		sp.free()
+	}
+	b.ensure()
+}
+
 // Close kills every panel the broker owns. Leased ones go too: the bars are
 // stopping with the supervisor.
 func (b *Broker) Close() {

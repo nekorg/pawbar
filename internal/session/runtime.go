@@ -24,10 +24,20 @@ func RuntimePath(ext string) string {
 		dir = os.TempDir()
 	}
 	name := "pawbar"
-	if d := os.Getenv("WAYLAND_DISPLAY"); d != "" {
-		name += "-" + filepath.Base(d)
-	} else if d := os.Getenv("DISPLAY"); d != "" {
-		name += "-" + strings.TrimPrefix(d, ":")
+	if k := Key(); k != "" {
+		name += "-" + k
 	}
 	return filepath.Join(dir, name+"."+ext)
+}
+
+// Key names this compositor session, empty when there is nothing to name it
+// by. Anything else keyed to a running pawbar is built from it.
+func Key() string {
+	if d := os.Getenv("WAYLAND_DISPLAY"); d != "" {
+		return filepath.Base(d)
+	}
+	if d := os.Getenv("DISPLAY"); d != "" {
+		return strings.TrimPrefix(d, ":")
+	}
+	return ""
 }

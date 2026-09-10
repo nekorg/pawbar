@@ -15,7 +15,7 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/itchyny/timefmt-go v0.1.6
 	github.com/jochenvg/go-udev v0.0.0-20240801134859-b65ed646224b
-	github.com/nekorg/katnip v0.2.0
+	github.com/nekorg/katnip v0.3.0
 	github.com/rs/zerolog v1.35.1
 	github.com/shirou/gopsutil/v3 v3.24.5
 	go.rockorager.dev/vaxis v0.14.0
