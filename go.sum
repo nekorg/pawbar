@@ -10,6 +10,8 @@ github.com/codelif/shmstream v0.1.0 h1:Z9YVe3QFRUKQPVeSe95Se2YLPa0x5248KY1rmyZfP
 github.com/codelif/shmstream v0.1.0/go.mod h1:egLjfn0XvTi8zbz4O2E3EPFMfpQoxh0KK6vbcL5BBgw=
 github.com/codelif/xdgicons v0.3.1 h1:MUGcxlmxPKhnlkm22lrlq6j52/znmbt6nVzlVRh/56k=
 github.com/codelif/xdgicons v0.3.1/go.mod h1:jCO1b/IxJF2cMbf9tRmesPqYZqx6IJOAFnXxXAJC6hg=
+github.com/codelif/xdgicons v0.4.0 h1:xb0PkdmGLCaS6Z7ch7Msy9LuJMfNbYzqjcluA/fkAD8=
+github.com/codelif/xdgicons v0.4.0/go.mod h1:jCO1b/IxJF2cMbf9tRmesPqYZqx6IJOAFnXxXAJC6hg=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=

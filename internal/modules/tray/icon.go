@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/codelif/gorsvg"
 	"github.com/codelif/xdgicons"
@@ -25,7 +26,12 @@ import (
 // iconCells is how many bar columns a rendered tray icon spans.
 const iconCells = 2
 
-var iconLookup = xdgicons.NewIconLookupWithConfig(xdgicons.LookupConfig{FallbackTheme: "Adwaita"})
+// iconLookup is built on first use, not at init: every pawbar panel re-execs
+// this binary, so a package-level lookup is paid by every bar and every menu
+// panel, most of which never resolve a tray icon at all.
+var iconLookup = sync.OnceValue(func() *xdgicons.IconLookup {
+	return xdgicons.NewIconLookupWithConfig(xdgicons.LookupConfig{FallbackTheme: "Adwaita"})
+})
 
 // iconColor is the color symbolic icons are recolored to: the module's
 // resolved foreground, falling back to white when it is not a plain RGB
@@ -96,9 +102,9 @@ func resolveIconPath(name, themeDir string) string {
 	}
 	var icon xdgicons.Icon
 	if strings.HasSuffix(name, "-symbolic") {
-		icon, _ = iconLookup.Lookup(name)
+		icon, _ = iconLookup().Lookup(name)
 	} else {
-		icon, _ = iconLookup.FindBestIcon([]string{name + "-symbolic", name}, 48, 2)
+		icon, _ = iconLookup().FindBestIcon([]string{name + "-symbolic", name}, 48, 2)
 	}
 	return icon.Path
 }
