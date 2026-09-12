@@ -26,6 +26,16 @@ import (
 // iconCells is how many bar columns a rendered tray icon spans.
 const iconCells = 2
 
+// iconSize is the nominal icon size to ask the theme for. An icon is drawn
+// one text row tall, so this is the size band a theme draws its status icons
+// at, and asking for it picks the artwork meant for that size.
+//
+// Asking for something much larger does not get a sharper icon (an SVG is
+// rasterized at a fixed size either way, see loadIcon) but it does get
+// different artwork: themes draw a 22px glyph with more padding around it
+// than a 24px one, so it lands smaller in the same box.
+const iconSize = 24
+
 // iconLookup is built on first use, not at init: every pawbar panel re-execs
 // this binary, so a package-level lookup is paid by every bar and every menu
 // panel, most of which never resolve a tray icon at all.
@@ -102,9 +112,9 @@ func resolveIconPath(name, themeDir string) string {
 	}
 	var icon xdgicons.Icon
 	if strings.HasSuffix(name, "-symbolic") {
-		icon, _ = iconLookup().Lookup(name)
+		icon, _ = iconLookup().FindIcon(name, iconSize, 1)
 	} else {
-		icon, _ = iconLookup().FindBestIcon([]string{name + "-symbolic", name}, 48, 2)
+		icon, _ = iconLookup().FindBestIcon([]string{name + "-symbolic", name}, iconSize, 1)
 	}
 	return icon.Path
 }

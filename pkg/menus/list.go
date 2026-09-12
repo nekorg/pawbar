@@ -157,15 +157,21 @@ var iconLookup = sync.OnceValue(func() *xdgicons.IconLookup {
 	return xdgicons.NewIconLookupWithConfig(xdgicons.LookupConfig{FallbackTheme: "Adwaita"})
 })
 
+// themeIconSize is the nominal size to ask the theme for. A menu icon is
+// drawn one row tall, so this is the size band a theme draws its small icons
+// at; asking for something much larger gets artwork drawn with more padding,
+// which lands smaller in the same box.
+const themeIconSize = 24
+
 func resolveIconPath(name string) string {
 	if name == "" {
 		return ""
 	}
 	var icon xdgicons.Icon
 	if strings.HasSuffix(name, "-symbolic") {
-		icon, _ = iconLookup().Lookup(name)
+		icon, _ = iconLookup().FindIcon(name, themeIconSize, 1)
 	} else {
-		icon, _ = iconLookup().FindBestIcon([]string{name + "-symbolic", name}, 48, 2)
+		icon, _ = iconLookup().FindBestIcon([]string{name + "-symbolic", name}, themeIconSize, 1)
 	}
 	return icon.Path
 }
