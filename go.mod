@@ -12,6 +12,7 @@ require (
 	github.com/codelif/xdgicons v0.4.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/fxamacker/cbor/v2 v2.8.0
+	github.com/go-text/typesetting v0.3.5
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/itchyny/timefmt-go v0.1.6
 	github.com/jochenvg/go-udev v0.0.0-20240801134859-b65ed646224b
@@ -19,7 +20,7 @@ require (
 	github.com/rs/zerolog v1.35.1
 	github.com/shirou/gopsutil/v3 v3.24.5
 	go.rockorager.dev/vaxis v0.14.0
-	golang.org/x/image v0.9.0
+	golang.org/x/image v0.23.0
 	golang.org/x/sys v0.33.0
 	gopkg.in/yaml.v3 v3.0.1
 )

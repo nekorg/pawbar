@@ -42,6 +42,8 @@ type cell struct {
 	hasMod   bool
 	isSpacer bool
 	img      *imgCell
+	// txt is set on every column of a rasterised complex-script run.
+	txt *textCell
 }
 
 // iconInset leaves a pixel of breathing room around a drawn tray icon.
@@ -271,7 +273,7 @@ func Render(win vaxis.Window) {
 				}
 				visible := trimEnd(block.cells, space, false)
 				if useEllipsis {
-					visible = append(clone(ellipsisCells), visible...)
+					visible = withEllipsisBefore(visible)
 				}
 				drawCells(win, visible, end-totalWidth(visible), mark)
 
@@ -282,7 +284,7 @@ func Render(win vaxis.Window) {
 				}
 				visible := trimStart(block.cells, space, false)
 				if useEllipsis {
-					visible = append(visible, ellipsisCells...)
+					visible = withEllipsisAfter(visible)
 				}
 				drawCells(win, visible, start, mark)
 			}
@@ -307,10 +309,26 @@ func Render(win vaxis.Window) {
 }
 
 func drawCells(win vaxis.Window, cells []cell, x int, mark func(int, int)) {
-	if len(cells) == 0 {
-		return
-	}
-	for _, r := range cells {
+	for i := 0; i < len(cells); {
+		r := cells[i]
+		// A complex run is drawn as one image over all the columns of it
+		// that survived, so gather them before writing any.
+		if r.txt != nil {
+			j := i + 1
+			for j < len(cells) && cells[j].txt != nil && cells[j].txt.run == r.txt.run {
+				j++
+			}
+			start := x
+			for _, c := range cells[i:j] {
+				next := writeCell(win, x, c)
+				mark(x, next-x)
+				x = next
+			}
+			drawTextRun(win, start, cells[i:j])
+			i = j
+			continue
+		}
+
 		start := x
 		next := writeCell(win, x, r)
 		mark(x, next-x)
@@ -320,6 +338,7 @@ func drawCells(win vaxis.Window, cells []cell, x int, mark func(int, int)) {
 			drawIcon(win, start, r.img)
 		}
 		x = next
+		i++
 	}
 }
 

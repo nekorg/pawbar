@@ -112,6 +112,8 @@ type supervisor struct {
 	// kitty decides whether panels share one kitty process, menus how many
 	// of them are kept warm.
 	kitty config.KittySettings
+	// font is bar.font, pinned on every kitty pawbar starts.
+	font  string
 	menus menus.PoolSettings
 	// host is the shared instance every panel lives in, nil when panels
 	// get a process each or when the instance has yet to come up.
@@ -134,6 +136,7 @@ func newSupervisor(log zerolog.Logger, sel config.OutputSel, flagSel *config.Out
 		flagSel:   flagSel,
 		sel:       sel,
 		kitty:     bar.Kitty,
+		font:      bar.Font,
 		menus:     menus.PoolSettings{Target: bar.Menus.Target, Max: bar.Menus.PoolMax()},
 		running:   make(map[string]*barPanel),
 		fails:     make(map[string]int),
@@ -214,7 +217,7 @@ func (s *supervisor) spawner() func(outputs.Monitor) (*katnip.Panel, error) {
 // as the bars and menus in it: the first bar pays for it, and every panel
 // after that is a cheap window.
 func (s *supervisor) startHost(cfg katnip.Config) (*katnip.Panel, error) {
-	host, first, err := katnip.Spawn(hostConfig(s.kitty), "pawbar", cfg)
+	host, first, err := katnip.Spawn(hostConfig(s.kitty, s.font), "pawbar", cfg)
 	if err != nil {
 		s.hostFails++
 		backoff := min(respawnBase<<(s.hostFails-1), respawnMax)
@@ -402,7 +405,7 @@ func (s *supervisor) startKitty(name string) (*barPanel, error) {
 	)
 	switch {
 	case !s.kitty.Shared():
-		cfg.KittyOverrides = menus.PanelOverrides
+		cfg.KittyOverrides = append(fontOverride(s.font), menus.PanelOverrides...)
 		p = katnip.NewPanel("pawbar", cfg)
 		err = p.Start()
 	case s.host != nil:

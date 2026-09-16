@@ -22,6 +22,7 @@ import (
 	"github.com/nekorg/pawbar/internal/logging"
 	_ "github.com/nekorg/pawbar/internal/modules/builtin"
 	"github.com/nekorg/pawbar/internal/monitor"
+	"github.com/nekorg/pawbar/internal/textrun"
 	"github.com/nekorg/pawbar/internal/tui"
 	"github.com/nekorg/pawbar/pkg/menus"
 	"github.com/nekorg/pawbar/pkg/module"
@@ -252,6 +253,17 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	{
 		size := vx.Size()
 		menus.SetCellMetrics(size.Cols, size.Rows, size.XPixel, size.YPixel)
+		textrun.Init(textrun.Options{
+			KittyCmd:      bar.Settings.Kitty.Command,
+			KittyConfig:   bar.Settings.Kitty.ConfigFile(),
+			FontSize:      menus.PanelFontSize,
+			Family:        bar.Settings.Font,
+			BaselineNudge: bar.Settings.Text.BaselineNudge,
+			// The shaper comes up in the background; the frames drawn
+			// before it did fell back to plain cells and want repainting.
+			Notify: func() { vx.PostEvent(vaxis.Redraw{}) },
+		})
+		setTextCell(size)
 	}
 
 	engine := core.New(bar, log)
@@ -312,6 +324,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 				// stay at whatever init measured.
 				vx.Resize(ev)
 				menus.SetCellMetrics(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
+				setTextCell(vx.Size())
 				// A resize is how a mode or scale change on this output
 				// reaches the bar; the cached geometry is now stale.
 				monitor.Invalidate()
@@ -319,6 +332,11 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 				log.Debug().Msgf("panel size: %d, %d", ev.XPixel, ev.YPixel)
 			case vaxis.Redraw:
 				render()
+			case vaxis.ColorThemeUpdate:
+				// Indexed and default colours are resolved by asking the
+				// terminal, and it has just changed its mind.
+				tui.ForgetColors()
+				fullResize()
 			case vaxis.Key:
 				if ev.String() == "Ctrl+c" {
 					vx.PostEvent(vaxis.QuitEvent{})
@@ -393,6 +411,14 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			}
 			log.Info().Msg("config: reloading")
 			bar = newBar
+			textrun.Init(textrun.Options{
+				KittyCmd:      bar.Settings.Kitty.Command,
+				KittyConfig:   bar.Settings.Kitty.ConfigFile(),
+				FontSize:      menus.PanelFontSize,
+				Family:        bar.Settings.Font,
+				BaselineNudge: bar.Settings.Text.BaselineNudge,
+				Notify:        func() { vx.PostEvent(vaxis.Redraw{}) },
+			})
 			engine.Reload(bar)
 			tui.Init(w, h, bar.Settings, bar.GapStyle)
 			tui.SetSlotCounts(engine.SlotCounts())
@@ -410,6 +436,16 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			engine.RestartSlot(s)
 		}
 	}
+}
+
+// setTextCell hands the shaper the panel's cell in pixels. Everything it
+// draws is measured off the cell, so this is what keeps a rasterised run the
+// same size as the text beside it.
+func setTextCell(size vaxis.Resize) {
+	if size.Cols <= 0 || size.Rows <= 0 {
+		return
+	}
+	textrun.SetCellSize(size.XPixel/size.Cols, size.YPixel/size.Rows)
 }
 
 func updateMouseShape(vx *vaxis.Vaxis, target vaxis.MouseShape, old *vaxis.MouseShape) {

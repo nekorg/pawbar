@@ -39,6 +39,8 @@ bar:
   defaults: true
   outputs: all
   exit_without_monitors: false
+  font: ""
+  text: {}
   kitty: {}
   menus: {}
 ```
@@ -60,6 +62,10 @@ bar:
 - `outputs`: which monitors get a bar. See [Monitors](#monitors).
 - `exit_without_monitors`: leave instead of waiting when the compositor
   reports no monitors at all. See [Monitors](#monitors).
+- `font`: the font family every panel draws with. Unset (the default) takes
+  whatever your `kitty.conf` says. See [Complex scripts](#complex-scripts).
+- `text`: how text a terminal cell grid cannot hold is drawn. See
+  [Complex scripts](#complex-scripts).
 - `kitty`: how many kitty processes the bars and menus run in, and how they
   are configured. See [Processes and memory](#processes-and-memory).
 - `menus`: how many menu panels are kept warm. See
@@ -151,6 +157,47 @@ Modules that mean something different per screen follow the monitor their
 bar is on: [`ws`](/docs/modules#ws) shows that monitor's workspaces and
 [`title`](/docs/modules#title) the window it is showing. Menus open on
 the monitor they were clicked from, at that monitor's scale.
+
+# Complex scripts
+
+A terminal cell grid cannot hold Devanagari and its neighbours. Their marks
+reorder, stack and join, and the spacing ones carry real width that every
+terminal width table scores as zero, so the terminal allots a fraction of
+the columns the text needs and overlaps the rest. Kitty gives
+`विकिपीडिया` five cells, eighty pixels, for a hundred and thirty eight
+pixels of ink. No font and no width pinning fixes that: the cell count is
+the contract with every program, and the text does not fit it.
+
+So pawbar shapes those scripts itself and draws them as a graphic over
+blank columns, at the terminal's own em and baseline. The columns keep
+their background, their underline and their clicks; only the ink is
+pawbar's. Truncation cuts at cluster boundaries, so a matra is never
+stranded from its base, and the ellipsis is drawn inside the image, flush
+against the ink.
+
+This covers Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu,
+Kannada, Malayalam, Sinhala, Thai, Lao, Khmer, Myanmar, Tibetan, Arabic,
+Hebrew, Syriac and Thaana. Everything else is left to the terminal, which
+places it honestly: Latin, Greek, Cyrillic, CJK, Hangul, emoji, box drawing
+and Nerd Font glyphs are all untouched.
+
+```yaml
+bar:
+  font: ""              # family every panel draws with; unset reads kitty.conf
+  text:
+    baseline_nudge: 0   # shift a drawn run by this many pixels
+```
+
+Nothing here normally needs setting. pawbar asks kitty itself for the cell
+size, the em and the baseline it is drawing at, which honours your
+`kitty.conf` including `include` directives and `symbol_map`; naming a face
+for a script with `symbol_map` is how you choose the font a script is drawn
+in. `bar.font` pins the family on the panels instead, and
+`bar.text.baseline_nudge` is the escape hatch for when kitty cannot be
+asked and the derived baseline lands a pixel out.
+
+Menus are not covered: they draw through the terminal, so complex scripts
+look there the way they look in any terminal.
 
 # Processes and memory
 

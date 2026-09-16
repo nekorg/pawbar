@@ -58,6 +58,20 @@ type BarSettings struct {
 	// ExitWithoutMonitors makes pawbar leave when the compositor reports
 	// no monitors, instead of waiting for one to appear.
 	ExitWithoutMonitors bool `yaml:"exit_without_monitors"`
+	// Font is the family the panels draw with. Unset (the default) takes
+	// whatever the inherited kitty.conf says.
+	Font string `yaml:"font"`
+	// Text tunes how text that a cell grid cannot hold is drawn.
+	Text TextSettings `yaml:"text"`
+}
+
+// TextSettings tune the rasterised runs pawbar draws for scripts a terminal
+// cell grid cannot express.
+type TextSettings struct {
+	// BaselineNudge shifts a rasterised run up (negative) or down by this
+	// many pixels. Only needed when kitty cannot be asked for its own
+	// metrics and the derived baseline lands a pixel out.
+	BaselineNudge int `yaml:"baseline_nudge"`
 }
 
 // KittySettings decide how many kitty processes pawbar runs.
@@ -179,6 +193,10 @@ func (b *BarSettings) fillDefaults() {
 }
 
 func (b *BarSettings) validate(n *yaml.Node, issues *Issues) {
+	if b.Text.BaselineNudge < -64 || b.Text.BaselineNudge > 64 {
+		issues.add("bar.text.baseline_nudge", n,
+			"must be within a cell, got %d pixels", b.Text.BaselineNudge)
+	}
 	b.Kitty.validate(subNodeOr(n, "kitty", n), issues)
 	b.Menus.validate(subNodeOr(n, "menus", n), issues)
 	b.Outputs.validate(subNodeOr(n, "outputs", n), issues)

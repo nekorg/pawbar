@@ -7,9 +7,19 @@
 package tui
 
 import (
+	"github.com/nekorg/pawbar/internal/textrun"
 	"github.com/nekorg/pawbar/pkg/module"
 	"go.rockorager.dev/vaxis"
 )
+
+// splitOrWhole is [textrun.Split] for callers that only want to walk the
+// parts, whether or not any of them need rasterising.
+func splitOrWhole(s string) []textrun.Part {
+	if parts := textrun.Split(s); parts != nil {
+		return parts
+	}
+	return []textrun.Part{{Text: s}}
+}
 
 func anchorOf(s string) anchor {
 	switch s {
@@ -145,8 +155,32 @@ func imageCells(seg module.Segment, hit Hit, spacer bool) []cell {
 	return out
 }
 
-// textToCells splits text into grapheme cells carrying hit metadata.
+// textToCells splits text into grapheme cells carrying hit metadata. Scripts
+// a cell grid cannot hold are split off first and laid out as rasterised
+// runs; everything else stays real terminal text.
 func textToCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []cell {
+	parts := textrun.Split(s)
+	if parts == nil {
+		return plainCells(s, style, hit, hasMod, spacer)
+	}
+	var out []cell
+	bold := style.Attribute&vaxis.AttrBold != 0
+	italic := style.Attribute&vaxis.AttrItalic != 0
+	for _, p := range parts {
+		// The shaper comes up in the background, so until it does this
+		// falls through to the terminal and repaints when it is ready.
+		if p.Complex {
+			if r := textrun.Shape(p.Text, bold, italic); r != nil {
+				out = append(out, runCells(r, style, hit, hasMod, spacer)...)
+				continue
+			}
+		}
+		out = append(out, plainCells(p.Text, style, hit, hasMod, spacer)...)
+	}
+	return out
+}
+
+func plainCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []cell {
 	chars := vaxis.Characters(s)
 	out := make([]cell, 0, len(chars))
 	for _, ch := range chars {
@@ -171,11 +205,19 @@ func SegmentsWidth(segs []module.Segment) int {
 			w += seg.Cells
 			continue
 		}
-		for _, ch := range vaxis.Characters(seg.Text) {
-			if term != nil {
-				ch.Width = term.CharacterWidth(ch.Grapheme)
+		for _, p := range splitOrWhole(seg.Text) {
+			if p.Complex {
+				if r := textrun.Shape(p.Text, false, false); r != nil {
+					w += r.Cells()
+					continue
+				}
 			}
-			w += ch.Width
+			for _, ch := range vaxis.Characters(p.Text) {
+				if term != nil {
+					ch.Width = term.CharacterWidth(ch.Grapheme)
+				}
+				w += ch.Width
+			}
 		}
 	}
 	return w
@@ -233,7 +275,7 @@ func trimStart(cells []cell, w int, ellipsis bool) []cell {
 	}
 	trim := cells[:end]
 	if ellipsis {
-		trim = append(clone(trim), ellipsisCells...)
+		trim = withEllipsisAfter(trim)
 	}
 	return trim
 }
@@ -261,7 +303,7 @@ func trimEnd(cells []cell, w int, ellipsis bool) []cell {
 	}
 	trim := cells[start:]
 	if ellipsis {
-		trim = append(clone(ellipsisCells), trim...)
+		trim = withEllipsisBefore(trim)
 	}
 	return trim
 }
@@ -291,7 +333,7 @@ func trimMiddle(cells []cell, w int, ellipsis bool) []cell {
 	}
 	trimmed := cells[lo : hi+1]
 	if ellipsis {
-		trimmed = append(append(clone(ellipsisCells), trimmed...), ellipsisCells...)
+		trimmed = withEllipsisAfter(withEllipsisBefore(trimmed))
 	}
 	return trimmed
 }

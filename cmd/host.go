@@ -34,12 +34,22 @@ func hostOverrides(extra []string) []string {
 	return append(o, extra...)
 }
 
+// fontOverride pins the panel font family when the config names one. It also
+// makes the font known by construction, so the text shaper does not have to
+// work out which face a panel ended up with.
+func fontOverride(font string) []string {
+	if font == "" {
+		return nil
+	}
+	return []string{"font_family=" + font}
+}
+
 // hostConfig describes the shared kitty instance.
-func hostConfig(k config.KittySettings) katnip.HostConfig {
+func hostConfig(k config.KittySettings, font string) katnip.HostConfig {
 	return katnip.HostConfig{
 		Socket:         session.RuntimePath("kitty"),
 		ConfigFile:     k.ConfigFile(),
-		KittyOverrides: hostOverrides(k.Overrides),
+		KittyOverrides: hostOverrides(append(fontOverride(font), k.Overrides...)),
 		// Keyed to this session so a second compositor session, or a
 		// stray kitty --single-instance, never lands in our instance.
 		InstanceGroup: "pawbar-" + session.Key(),

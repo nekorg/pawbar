@@ -18,6 +18,10 @@ import (
 //
 // A panel with its own kitty process gets these as -o. Panels sharing one
 // instance cannot, so the supervisor puts them on the instance instead.
+// PanelFontSize is the size pinned below, in points. The text shaper needs
+// it to ask kitty for the metrics the panel is actually drawing at.
+const PanelFontSize = 12
+
 var PanelOverrides = []string{
 	"font_size=12",
 	"cursor_trail=0",
