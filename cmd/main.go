@@ -258,6 +258,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 
 	w, h := win.Size()
 	log.Debug().Msgf("panel size (cells): %d, %d", w, h)
+	tui.Bind(vx)
 	tui.Init(w, h, bar.Settings, bar.GapStyle)
 	tui.SetSlotCounts(engine.SlotCounts())
 	tui.SetSpacerSlots(engine.SpacerSlots())
@@ -284,11 +285,15 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 		tui.Render(win)
 		vx.Render()
 	}
+	// fullResize repaints every cell instead of diffing. It is also the way
+	// back from a desync: if the terminal ever disagreed with the model about
+	// where a grapheme ended, only a full repaint clears the stale columns.
 	fullResize := func() {
 		win = vx.Window()
 		w, h = win.Size()
 		tui.Resize(w, h)
-		render()
+		tui.Render(win)
+		vx.Refresh()
 	}
 
 	render()
@@ -302,6 +307,10 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 		case ev := <-screenEvents:
 			switch ev := ev.(type) {
 			case vaxis.Resize:
+				// vaxis only tracks the new geometry if we hand the event
+				// back; without this Window().Size() and the cell buffers
+				// stay at whatever init measured.
+				vx.Resize(ev)
 				menus.SetCellMetrics(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
 				// A resize is how a mode or scale change on this output
 				// reaches the bar; the cached geometry is now stale.

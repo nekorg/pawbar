@@ -56,6 +56,14 @@ var (
 	iconSeen  = map[string]bool{}
 )
 
+// term is the terminal we lay out for. Grapheme widths have to be measured the
+// way it will render them; uucode's numbers are only right if the terminal
+// happens to segment the same way. nil in tests, which fall back to uucode.
+var term *vaxis.Vaxis
+
+// Bind sets the terminal used to measure grapheme widths. Call before Init.
+func Bind(vx *vaxis.Vaxis) { term = vx }
+
 var (
 	width, height int
 	// [side][slot][level] -> segments, levels widest first.

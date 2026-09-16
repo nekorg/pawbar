@@ -150,6 +150,9 @@ func textToCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []ce
 	chars := vaxis.Characters(s)
 	out := make([]cell, 0, len(chars))
 	for _, ch := range chars {
+		if term != nil {
+			ch.Width = term.CharacterWidth(ch.Grapheme)
+		}
 		out = append(out, cell{
 			c:        vaxis.Cell{Character: ch, Style: style},
 			hit:      hit,
@@ -169,6 +172,9 @@ func SegmentsWidth(segs []module.Segment) int {
 			continue
 		}
 		for _, ch := range vaxis.Characters(seg.Text) {
+			if term != nil {
+				ch.Width = term.CharacterWidth(ch.Grapheme)
+			}
 			w += ch.Width
 		}
 	}
@@ -178,6 +184,11 @@ func SegmentsWidth(segs []module.Segment) int {
 // writeCell writes one cell (padding wide graphemes) and mirrors it into
 // the hit table. Returns x + grapheme width.
 func writeCell(win vaxis.Window, x int, c cell) int {
+	if c.c.Width == 0 {
+		// Layout budgeted no column for this, but vaxis spends one on any
+		// cell it holds. Drop it instead of letting it push the row over.
+		return x
+	}
 	if x+c.c.Width > width {
 		return x + c.c.Width
 	}
