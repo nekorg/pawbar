@@ -53,16 +53,24 @@ func shrink(runs *[3][]run) bool {
 
 // budgetOf is how many columns a side can still draw into, mirroring how
 // Render measures the free space for that anchor.
+//
+// A centered middle block is not the only thing in the way: a side placed
+// before this one can already have run past it. Taking whichever reaches
+// further is what keeps this in step with Render, which hands out columns
+// first come first served. Reading only the middle here let a long left
+// module overrun the middle, leave the right side a budget it did not have,
+// and so never tell it to shrink: the elastic parts stayed at full length
+// and Render then cut the whole block head-first instead.
 func budgetOf(side, lo, hi, mlo, mhi int) int {
 	switch anchor(side) {
 	case left:
 		if mlo >= 0 {
-			return mlo - lo
+			return min(mlo, hi) - lo
 		}
 		return hi - lo
 	case right:
 		if mhi >= 0 {
-			return hi - mhi
+			return hi - max(mhi, lo)
 		}
 		return hi - lo
 	default: // middle: centered, so it grows symmetrically from the center

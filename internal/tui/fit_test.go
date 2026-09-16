@@ -8,6 +8,7 @@ package tui
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nekorg/pawbar/internal/config"
@@ -396,5 +397,33 @@ func TestEndToEndElasticFormat(t *testing.T) {
 	// two elastic pieces level off at 8 each.
 	if got, want := runsText(fit()[2]), "> TITLETI… * ARTISTA…"; got != want {
 		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+// A side placed before this one can already have run past the middle. If the
+// budget only counts the middle, the side after it is told it fits, so its
+// elastic pieces never shrink and Render cuts the whole block head-first
+// instead -- taking the icons the elastic markers exist to protect.
+func TestFitAccountsForASideThatOverranTheMiddle(t *testing.T) {
+	runs := setupSides(t, 60, []string{"left", "middle", "right"},
+		[]module.Segment{{Text: "LEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFT"}}, // 40, rigid
+		[]module.Segment{{Text: "CLOCK"}},
+		[]module.Segment{
+			{Text: ">"},
+			{Text: "TITLETITLETITLETITLETITLE", Shrink: 1},
+			{Text: " * "},
+		})
+
+	// The left ends at column 40, well past the middle's centred span at
+	// 27..31, so the right has 20 columns and not 29.
+	if w := runsWidth(runs[2]); w > 20 {
+		t.Errorf("right side is %d columns, past the %d it can draw into", w, 20)
+	}
+	got := runsText(runs[2])
+	if !strings.HasPrefix(got, ">") || !strings.HasSuffix(got, " * ") {
+		t.Errorf("rigid pieces were trimmed away instead of the elastic one: %q", got)
+	}
+	if !strings.Contains(got, "…") {
+		t.Errorf("the elastic piece did not shrink: %q", got)
 	}
 }
