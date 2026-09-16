@@ -54,7 +54,9 @@ bar:
 - `shrink_min`: the floor, in columns, that an
   [elastic placeholder](#elastic-text) is never shrunk below.
 - `truncate_priority`: which anchors keep their content when the bar
-  overflows; earlier wins. Must list all three.
+  overflows; earlier wins. Must list all three. A middle block never leaves
+  its centred columns, so a long left module can cover it and it will simply
+  not draw; put `middle` first if something there must always be visible.
 - `enable_ellipsis` / `ellipsis`: mark truncation points.
 - `strict`: any config issue aborts startup (and rejects hot reloads).
 - `defaults`: set `false` to drop every module's

@@ -248,23 +248,11 @@ func Render(win vaxis.Window) {
 			}
 			switch {
 			case firstOcc == start && lastOcc == end-1:
-				gapStart := 0
-				for gapStart < width && occ[gapStart] {
-					gapStart++
-				}
-				gapEnd := width - 1
-				for gapEnd >= 0 && occ[gapEnd] {
-					gapEnd--
-				}
-				gapLen := gapEnd - gapStart + 1
-				if gapLen <= 0 {
-					// No room for this block; later blocks may still fit.
-					break
-				}
-				if gapLen-2*ellW > 0 {
-					visible := trimMiddle(block.cells, gapLen, useEllipsis)
-					drawCells(win, visible, gapStart+(gapLen-totalWidth(visible))/2, mark)
-				}
+				// Nothing of its own span survives. It used to go hunting for
+				// free columns anywhere in the bar, which put the middle block
+				// somewhere that is not the middle and spent room the fitting
+				// pass had already promised the side after it. A middle block
+				// stays in the middle or it does not draw.
 
 			case firstOcc == start:
 				space := end - lastOcc - 1 - ellW
