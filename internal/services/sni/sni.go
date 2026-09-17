@@ -662,23 +662,42 @@ func (s *Service) trackItem(bus string, path dbus.ObjectPath) {
 
 	s.publishItems()
 
-	// Fetch properties
-	s.refreshItem(it)
-
+	// Claim the teardown channel before going async, so an item that is
+	// removed in the meantime still tears these goroutines down.
 	done := make(chan struct{})
 	s.watchMu.Lock()
 	s.watchers[key] = done
 	s.watchMu.Unlock()
 
-	// Watch for changes
-	go s.watchItemProps(it, done)
+	// Fetching the item's properties is a round trip back into the app that
+	// just called us, and RegisterStatusNotifierItem runs on the dbus handler
+	// goroutine. Doing it here wedges any client that registers with a
+	// blocking call: it is waiting on our reply and so cannot answer ours,
+	// and both sides sit there until the call times out. Hand the rest to a
+	// goroutine so the handler can return.
+	go func() {
+		defer logging.Recover("sni.trackItem")
 
-	// If we're the watcher, monitor this item's bus for disconnection
-	if s.owned {
-		go s.monitorItemBus(it, done)
-	}
+		s.refreshItem(it)
 
-	s.emit(Event{Kind: ItemAdded, ID: key, Item: *it})
+		// The item can already be gone: registered and quit, or the bus
+		// monitor saw it drop while we were still asking.
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		// Watch for changes
+		go s.watchItemProps(it, done)
+
+		// If we're the watcher, monitor this item's bus for disconnection
+		if s.owned {
+			go s.monitorItemBus(it, done)
+		}
+
+		s.emit(Event{Kind: ItemAdded, ID: key, Item: *it})
+	}()
 }
 
 // stopWatchers tears down the goroutines watching a removed item.
