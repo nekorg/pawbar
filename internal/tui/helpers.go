@@ -63,18 +63,38 @@ func flatten(side int) []run {
 			out = append(out, run{cells: clone(gapCells)})
 		}
 		first, prevSpacer = false, spacer
+		out = append(out, slotRuns(side, idx, spacer)...)
+	}
+	return out
+}
 
-		for _, seg := range slotSegments(side, idx) {
-			hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
-			if seg.Image != nil && seg.Cells > 0 {
-				out = append(out, run{cells: imageCells(seg, hit, spacer)})
-				continue
-			}
-			out = append(out, run{
-				cells:  textToCells(seg.Text, seg.Style, hit, true, spacer),
-				shrink: seg.Shrink,
-			})
+// slotRuns is one slot's segments laid out at its current detail level.
+//
+// The runs are cached and handed out shared: the fitting pass only ever
+// reassigns run.cells to a sub-slice or to a freshly cloned one, and
+// buildBlocks copies every cell out before Render trims anything, so nothing
+// downstream writes through into the cache.
+func slotRuns(side, idx int, spacer bool) []run {
+	lvl := slotLevel(side, idx)
+	levelCache := slotLevels(side, idx)
+	if lvl < len(levelCache) && levelCache[lvl].ok {
+		return levelCache[lvl].runs
+	}
+
+	var out []run
+	for _, seg := range slotSegments(side, idx) {
+		hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
+		if seg.Image != nil && seg.Cells > 0 {
+			out = append(out, run{cells: imageCells(seg, hit, spacer)})
+			continue
 		}
+		out = append(out, run{
+			cells:  textToCells(seg.Text, seg.Style, hit, true, spacer),
+			shrink: seg.Shrink,
+		})
+	}
+	if lvl < len(levelCache) {
+		levelCache[lvl] = cachedRuns{runs: out, ok: true}
 	}
 	return out
 }

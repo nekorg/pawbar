@@ -99,3 +99,92 @@ func TestMiddleFirstKeepsItsColumns(t *testing.T) {
 	}
 	t.Logf("%q", got)
 }
+
+// Laid-out cells are cached per slot and detail level. A new snapshot for a
+// slot has to drop that slot's entry, or the bar keeps drawing the old text
+// forever.
+func TestSnapshotInvalidatesCachedCells(t *testing.T) {
+	const cols = 20
+	win := vaxis.NewOffscreenWindow(cols, 1)
+
+	ellipsis := true
+	Init(cols, 1, config.BarSettings{
+		TruncatePriority: []string{"left", "middle", "right"},
+		EnableEllipsis:   &ellipsis,
+		Ellipsis:         "…",
+		ShrinkMin:        3,
+	}, vaxis.Style{})
+	SetSlotCounts(1, 0, 0)
+	SetSpacerSlots([]bool{false}, nil, nil)
+	SetSlotPriorities([]int{0}, nil, nil)
+
+	read := func() string {
+		Render(win)
+		var b strings.Builder
+		for col := range cols {
+			g := win.Vx.Cell(col, 0).Grapheme
+			if g == "" {
+				g = " "
+			}
+			b.WriteString(g)
+		}
+		return strings.TrimRight(b.String(), " ")
+	}
+
+	SetSnapshot(0, 0, [][]module.Segment{{{Text: "before"}}})
+	if got := read(); got != "before" {
+		t.Fatalf("first frame = %q, want %q", got, "before")
+	}
+
+	SetSnapshot(0, 0, [][]module.Segment{{{Text: "after"}}})
+	if got := read(); got != "after" {
+		t.Fatalf("second frame = %q, want %q; cached cells went stale", got, "after")
+	}
+}
+
+// Stepping a slot down its ladder and back up must not serve the narrow
+// level's cells at the wide level.
+func TestLevelsAreCachedApart(t *testing.T) {
+	const wide = 40
+	win := vaxis.NewOffscreenWindow(wide, 1)
+
+	ellipsis := true
+	Init(wide, 1, config.BarSettings{
+		TruncatePriority: []string{"left", "middle", "right"},
+		EnableEllipsis:   &ellipsis,
+		Ellipsis:         "…",
+		ShrinkMin:        3,
+	}, vaxis.Style{})
+	SetSlotCounts(1, 0, 0)
+	SetSpacerSlots([]bool{false}, nil, nil)
+	SetSlotPriorities([]int{0}, nil, nil)
+	SetSnapshot(0, 0, [][]module.Segment{
+		{{Text: "a-very-long-label"}},
+		{{Text: "short"}},
+	})
+
+	read := func(cols int) string {
+		Render(win)
+		var b strings.Builder
+		for col := range cols {
+			g := win.Vx.Cell(col, 0).Grapheme
+			if g == "" {
+				g = " "
+			}
+			b.WriteString(g)
+		}
+		return strings.TrimRight(b.String(), " ")
+	}
+
+	if got := read(wide); got != "a-very-long-label" {
+		t.Fatalf("wide = %q", got)
+	}
+	Resize(8, 1)
+	if got := read(8); got != "short" {
+		t.Fatalf("narrow = %q, want the stepped-down level", got)
+	}
+	Resize(wide, 1)
+	if got := read(wide); got != "a-very-long-label" {
+		t.Fatalf("widened back = %q, want the wide level again", got)
+	}
+}

@@ -179,7 +179,10 @@ func resolveColor(c vaxis.Color) {
 // terminal's answers to those queries have just changed.
 func ForgetColors() {
 	colorMu.Lock()
-	defer colorMu.Unlock()
 	clear(colorCache)
 	clear(colorPending)
+	colorMu.Unlock()
+	// Rasterised runs bake a resolved fg into the image key, so cached
+	// cells are keyed on colours that no longer exist.
+	Invalidate()
 }

@@ -260,8 +260,12 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			Family:        bar.Settings.Font,
 			BaselineNudge: bar.Settings.Text.BaselineNudge,
 			// The shaper comes up in the background; the frames drawn
-			// before it did fell back to plain cells and want repainting.
-			Notify: func() { vx.PostEvent(vaxis.Redraw{}) },
+			// before it did fell back to plain cells, and those cells are
+			// cached, so drop them before asking for the repaint.
+			Notify: func() {
+				tui.Invalidate()
+				vx.PostEvent(vaxis.Redraw{})
+			},
 		})
 		setTextCell(size)
 	}

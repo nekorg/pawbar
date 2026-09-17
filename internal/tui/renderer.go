@@ -48,6 +48,13 @@ type cell struct {
 // iconInset leaves a pixel of breathing room around a drawn tray icon.
 const iconInset = 1
 
+// cachedRuns is a slot's laid-out runs at one detail level. ok separates
+// "not built yet" from "built, and it draws nothing".
+type cachedRuns struct {
+	runs []run
+	ok   bool
+}
+
 // imgKey identifies a cached graphic. Cell size is part of it: a dpi or font
 // change re-scales the icon rather than reusing a bitmap sized for the old
 // cell. Comparable, so indexing costs no formatting.
@@ -88,7 +95,12 @@ var (
 	spacers    [3][]bool // [side][slot] -> spacer module?
 	priorities [3][]int  // [side][slot] -> degrade order, lowest first
 	// levels[side][slot] is the detail level the last fit chose.
-	levels        [3][]int
+	levels [3][]int
+	// slotCache[side][slot][level] is that slot's laid-out runs. Laying a
+	// segment out means segmenting graphemes and asking the terminal for
+	// every width; between two frames a clock changes one digit and the
+	// other nine modules do not move at all.
+	slotCache     [3][][]cachedRuns
 	state         []cell
 	truncOrder    []string
 	useEllipsis   bool
@@ -125,6 +137,7 @@ func Init(w, h int, settings config.BarSettings, gapStyle vaxis.Style) {
 	shrinkMin = settings.ShrinkMin
 	// kitty can report mouse events at the very edge, one past width.
 	state = make([]cell, width+1)
+	Invalidate()
 }
 
 // SetSlotCounts sizes the snapshot store: one slot per module instance.
@@ -132,6 +145,7 @@ func SetSlotCounts(l, m, r int) {
 	for side, n := range [3]int{l, m, r} {
 		snapshots[side] = make([][][]module.Segment, n)
 		levels[side] = make([]int, n)
+		slotCache[side] = make([][]cachedRuns, n)
 	}
 }
 
@@ -151,6 +165,8 @@ func SetSpacerSlots(l, m, r []bool) {
 	spacers[0] = l
 	spacers[1] = m
 	spacers[2] = r
+	// isSpacer is baked into every cached cell.
+	Invalidate()
 }
 
 // SetSnapshot stores a slot's latest render output: one segment run per
@@ -160,6 +176,35 @@ func SetSnapshot(side, idx int, slotLevels [][]module.Segment) {
 		return
 	}
 	snapshots[side][idx] = slotLevels
+	slotCache[side][idx] = nil
+}
+
+// slotLevel is the detail level a slot actually draws at: what fit chose,
+// clamped to the ladder it has.
+func slotLevel(side, idx int) int {
+	if n := len(snapshots[side][idx]); n > 0 {
+		return min(levels[side][idx], n-1)
+	}
+	return 0
+}
+
+// slotLevels is a slot's per-level run cache, grown to its ladder on first
+// use. A slot whose snapshot changed has a nil one and starts over.
+func slotLevels(side, idx int) []cachedRuns {
+	n := max(len(snapshots[side][idx]), 1)
+	if len(slotCache[side][idx]) != n {
+		slotCache[side][idx] = make([]cachedRuns, n)
+	}
+	return slotCache[side][idx]
+}
+
+// Invalidate drops every slot's laid-out cells. Anything that changes how a
+// segment rasterises rather than what it says has to call this: the cache is
+// keyed on the snapshot, and none of that is in the snapshot.
+func Invalidate() {
+	for side := range slotCache {
+		clear(slotCache[side])
+	}
 }
 
 // slotSegments returns the segments a slot draws at its currently chosen
@@ -176,6 +221,7 @@ func slotSegments(side, idx int) []module.Segment {
 func Resize(w, h int) {
 	width, height = w, h
 	state = make([]cell, width+1)
+	Invalidate()
 }
 
 // HitAt maps a bar column to the slot beneath it. leftHalf tells which half
