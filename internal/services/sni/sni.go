@@ -111,6 +111,9 @@ type Service struct {
 	// Properties when acting as watcher
 	props *prop.Properties
 	hosts map[string]bool // track registered hosts
+	// publishMu serializes taking a snapshot of items and publishing it.
+	// See publishItems.
+	publishMu sync.Mutex
 
 	// For handling watcher transitions
 	watcherOwner string // current watcher bus name
@@ -370,8 +373,8 @@ func (s *Service) attemptWatcherTakeover() {
 	s.mu.Unlock()
 
 	// Restore items to properties
+	s.publishItems()
 	if s.props != nil {
-		s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
 		s.props.SetMust(ifaceWatcher, "IsStatusNotifierHostRegistered", s.isAnyHostRegistered())
 	}
 
@@ -560,6 +563,24 @@ func (s *Service) getRegisteredItems() []string {
 	return items
 }
 
+// publishItems republishes RegisteredStatusNotifierItems from the tracked set.
+//
+// The snapshot and the write are one critical section on purpose. Taking them
+// separately lets two items registering at once publish out of order: both
+// snapshot, the one holding the newer list writes first, and the property ends
+// up describing a set that is already stale. It stayed stale until the next
+// add or remove, and hosts read that property.
+//
+// Lock order is publishMu then mu, and callers must not hold mu.
+func (s *Service) publishItems() {
+	if !s.owned || s.props == nil {
+		return
+	}
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
+}
+
 func (s *Service) isAnyHostRegistered() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -639,10 +660,7 @@ func (s *Service) trackItem(bus string, path dbus.ObjectPath) {
 	logging.Log.Debug().Msgf("sni: added item %s to tracking", key)
 	s.mu.Unlock()
 
-	// Update property if we're the watcher
-	if s.owned && s.props != nil {
-		s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
-	}
+	s.publishItems()
 
 	// Fetch properties
 	s.refreshItem(it)
@@ -684,10 +702,8 @@ func (s *Service) removeByPath(path dbus.ObjectPath) {
 	}
 	s.mu.Unlock()
 
-	// Update property if we're the watcher. Must happen outside the
-	// lock: getRegisteredItems re-locks.
-	if s.owned && s.props != nil && len(removed) > 0 {
-		s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
+	if len(removed) > 0 {
+		s.publishItems()
 	}
 
 	// Emit events outside the lock to prevent deadlocks
@@ -728,11 +744,7 @@ func (s *Service) removeByKey(key string) {
 
 	s.stopWatchers(key)
 
-	// Update property if we're the watcher. Must happen outside the
-	// lock: getRegisteredItems re-locks.
-	if wasOwned && s.props != nil {
-		s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
-	}
+	s.publishItems()
 
 	// Emit unregistered signal if we're the watcher (must be outside lock)
 	if wasOwned {
@@ -758,10 +770,8 @@ func (s *Service) purgeByBus(bus string) {
 	}
 	s.mu.Unlock()
 
-	// Update property if we're the watcher. Must happen outside the
-	// lock: getRegisteredItems re-locks.
-	if s.owned && s.props != nil && len(removed) > 0 {
-		s.props.SetMust(ifaceWatcher, "RegisteredStatusNotifierItems", s.getRegisteredItems())
+	if len(removed) > 0 {
+		s.publishItems()
 	}
 
 	// Emit signals for removed items outside the lock
