@@ -144,7 +144,7 @@ func visibleSlots(side int) []int {
 // The reserved cells share one Hit so clicks route to the segment's region.
 func imageCells(seg module.Segment, hit Hit, spacer bool) []cell {
 	out := make([]cell, 0, seg.Cells)
-	blank := vaxis.Cell{Character: vaxis.Characters(" ")[0], Style: seg.Style}
+	blank := vaxis.Cell{Character: blankChar, Style: seg.Style}
 	for i := 0; i < seg.Cells; i++ {
 		c := cell{c: blank, hit: hit, hasMod: true, isSpacer: spacer}
 		if i == 0 {

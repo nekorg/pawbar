@@ -58,6 +58,10 @@ var (
 	iconSeen  = map[string]bool{}
 )
 
+// blankChar is a space. vaxis.Characters would spin up a grapheme iterator
+// to tell us the same thing, once per column per frame.
+var blankChar = vaxis.Character{Grapheme: " ", Width: 1}
+
 // term is the terminal we lay out for. Grapheme widths have to be measured the
 // way it will render them; uucode's numbers are only right if the terminal
 // happens to segment the same way. nil in tests, which fall back to uucode.
@@ -189,7 +193,7 @@ func HitAt(col int, leftHalf bool) (Hit, bool) {
 // Render lays all snapshots out and writes them to the window.
 func Render(win vaxis.Window) {
 	for i := range state {
-		state[i] = cell{c: vaxis.Cell{Character: vaxis.Characters(" ")[0]}}
+		state[i] = cell{c: vaxis.Cell{Character: blankChar}}
 	}
 	win.Clear()
 	clear(iconSeen)

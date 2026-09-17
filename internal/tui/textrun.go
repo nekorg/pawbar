@@ -27,7 +27,7 @@ type textCell struct {
 // cells, so their background, their underline and their hit metadata all
 // still come from the terminal; only the ink is ours.
 func runCells(r *textrun.Run, style vaxis.Style, hit Hit, hasMod, spacer bool) []cell {
-	blank := vaxis.Cell{Character: vaxis.Characters(" ")[0], Style: style}
+	blank := vaxis.Cell{Character: blankChar, Style: style}
 	out := make([]cell, 0, r.Cells())
 	for i := range r.Cells() {
 		out = append(out, cell{
