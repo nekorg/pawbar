@@ -48,8 +48,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c h1:ncq/mPwQF4JjgDlrVEn3C11VoGHZN7m8qihwgMEtzYw=
 github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c/go.mod h1:OmDBASR4679mdNQnz2pUhc2G8CO2JrUAVFDRBDP/hJE=
-github.com/rockorager/go-uucode v1.2.0 h1:xwUIndxE+z1PIrWALT7unu4L8x27qMsC/5X3aonJo6o=
-github.com/rockorager/go-uucode v1.2.0/go.mod h1:0BZXIGRvWIHt1ruBeViNGcuKyQ3+BRHQbgyXkqRCz38=
+github.com/rockorager/go-uucode v1.2.2 h1:bqVVrZtdwb8v4OB5BIw/aSAKXvGMbOjQwDTHsRC7XhU=
+github.com/rockorager/go-uucode v1.2.2/go.mod h1:0BZXIGRvWIHt1ruBeViNGcuKyQ3+BRHQbgyXkqRCz38=
 github.com/rs/zerolog v1.35.1 h1:m7xQeoiLIiV0BCEY4Hs+j2NG4Gp2o2KPKmhnnLiazKI=
 github.com/rs/zerolog v1.35.1/go.mod h1:EjML9kdfa/RMA7h/6z6pYmq1ykOuA8/mjWaEvGI+jcw=
 github.com/shirou/gopsutil/v3 v3.24.5 h1:i0t8kL+kQTvpAYToeuiVk3TgDeKOFioZO3Ztz/iZ9pI=
