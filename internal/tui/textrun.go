@@ -7,7 +7,6 @@
 package tui
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"sync"
@@ -113,7 +112,7 @@ func drawTextRun(win vaxis.Window, col int, group []cell) {
 		return
 	}
 
-	cacheKey := fmt.Sprintf("%s@%dx%d", key, cellW, cellH)
+	cacheKey := imgKey{key: key, w: cellW, h: cellH}
 	iconSeen[cacheKey] = true
 	kimg, cached := iconCache[cacheKey]
 	if !cached {

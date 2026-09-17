@@ -10,7 +10,6 @@
 package tui
 
 import (
-	"fmt"
 	"image"
 
 	"github.com/nekorg/pawbar/internal/config"
@@ -49,13 +48,25 @@ type cell struct {
 // iconInset leaves a pixel of breathing room around a drawn tray icon.
 const iconInset = 1
 
+// imgKey identifies a cached graphic. Cell size is part of it: a dpi or font
+// change re-scales the icon rather than reusing a bitmap sized for the old
+// cell. Comparable, so indexing costs no formatting.
+type imgKey struct {
+	key  string
+	w, h int
+}
+
+// cellPx is the terminal's cell size in pixels. Asking vaxis for it takes its
+// lock, so Render asks once and hands it down.
+type cellPx struct{ w, h int }
+
 // iconCache holds encoded Kitty graphics keyed by ImageKey. Encoding is
 // async and Draw must place the same image every frame, so images are
 // created once and reused; iconSeen tracks which survived the current frame
 // so vanished ones can be freed.
 var (
-	iconCache = map[string]*vaxis.KittyImage{}
-	iconSeen  = map[string]bool{}
+	iconCache = map[imgKey]*vaxis.KittyImage{}
+	iconSeen  = map[imgKey]bool{}
 )
 
 // blankChar is a space. vaxis.Characters would spin up a grapheme iterator
@@ -198,6 +209,11 @@ func Render(win vaxis.Window) {
 	win.Clear()
 	clear(iconSeen)
 
+	var cp cellPx
+	if size := win.Vx.Size(); size.Cols > 0 && size.Rows > 0 {
+		cp = cellPx{w: size.XPixel / size.Cols, h: size.YPixel / size.Rows}
+	}
+
 	blocks := buildBlocks()
 	occ := make([]bool, width)
 
@@ -223,7 +239,7 @@ func Render(win vaxis.Window) {
 			if fullW > free {
 				visible = trimStart(block.cells, free, useEllipsis)
 			}
-			drawCells(win, visible, 0, mark)
+			drawCells(win, visible, 0, cp, mark)
 
 		case middle:
 			start := (width - fullW) / 2
@@ -242,7 +258,7 @@ func Render(win vaxis.Window) {
 				}
 			}
 			if firstOcc == -1 {
-				drawCells(win, block.cells, start, mark)
+				drawCells(win, block.cells, start, cp, mark)
 				break
 			}
 
@@ -267,7 +283,7 @@ func Render(win vaxis.Window) {
 				if useEllipsis {
 					visible = withEllipsisBefore(visible)
 				}
-				drawCells(win, visible, end-totalWidth(visible), mark)
+				drawCells(win, visible, end-totalWidth(visible), cp, mark)
 
 			case lastOcc == end-1 || firstOcc > start:
 				space := firstOcc - start - ellW
@@ -278,7 +294,7 @@ func Render(win vaxis.Window) {
 				if useEllipsis {
 					visible = withEllipsisAfter(visible)
 				}
-				drawCells(win, visible, start, mark)
+				drawCells(win, visible, start, cp, mark)
 			}
 
 		case right:
@@ -293,14 +309,14 @@ func Render(win vaxis.Window) {
 			if len(visible) == 0 {
 				break
 			}
-			drawCells(win, visible, width-totalWidth(visible), mark)
+			drawCells(win, visible, width-totalWidth(visible), cp, mark)
 		}
 	}
 
 	pruneIcons()
 }
 
-func drawCells(win vaxis.Window, cells []cell, x int, mark func(int, int)) {
+func drawCells(win vaxis.Window, cells []cell, x int, cp cellPx, mark func(int, int)) {
 	for i := 0; i < len(cells); {
 		r := cells[i]
 		// A complex run is drawn as one image over all the columns of it
@@ -327,7 +343,7 @@ func drawCells(win vaxis.Window, cells []cell, x int, mark func(int, int)) {
 		// Draw the icon over its reserved span only when it fits whole;
 		// a partially trimmed icon is dropped rather than clipped.
 		if r.img != nil && start+r.img.span <= width {
-			drawIcon(win, start, r.img)
+			drawIcon(win, start, r.img, cp)
 		}
 		x = next
 		i++
@@ -338,16 +354,10 @@ func drawCells(win vaxis.Window, cells []cell, x int, mark func(int, int)) {
 // col, scaled to one row and centered pixel-precisely (mirrors the menu
 // gutter-icon renderer). Images are cached by key + cell size across
 // frames.
-func drawIcon(win vaxis.Window, col int, ic *imgCell) {
-	var cellW, cellH int
-	if size := win.Vx.Size(); size.Cols > 0 && size.Rows > 0 {
-		cellW = size.XPixel / size.Cols
-		cellH = size.YPixel / size.Rows
-	}
+func drawIcon(win vaxis.Window, col int, ic *imgCell, cp cellPx) {
+	cellW, cellH := cp.w, cp.h
 
-	// Cell size is part of the key: a DPI/font change re-scales the icon
-	// rather than reusing a bitmap sized for the old cell.
-	cacheKey := fmt.Sprintf("%s@%dx%d", ic.key, cellW, cellH)
+	cacheKey := imgKey{key: ic.key, w: cellW, h: cellH}
 	iconSeen[cacheKey] = true
 
 	kimg, cached := iconCache[cacheKey]
