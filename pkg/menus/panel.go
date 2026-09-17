@@ -45,6 +45,32 @@ var PanelOverrides = []string{
 	// its cells; clamping then only has to account for panelPad, not
 	// unknown chrome.
 	"window_padding_width=0",
+
+	// kitty costs more idle CPU than pawbar does. Everything below turns
+	// off work a bar panel can never use. The user's own overrides are
+	// appended after these, and kitty takes the last -o, so anything here
+	// stays overridable.
+
+	// kitty sits on our bytes for 3ms before parsing. Safe to drop: vaxis
+	// wraps every frame in DECSET 2026, so a frame is never torn.
+	"input_delay=0",
+	// a one row panel was keeping 2000 rows of scrollback.
+	"scrollback_lines=0",
+	// pattern-scans the cells under a pointer that lives on this bar.
+	"detect_urls=no",
+	// pawbar emits no OSC 8.
+	"allow_hyperlinks=no",
+	// 33 default mappings on a surface pawbar owns every click of.
+	"clear_all_mouse_actions=yes",
+	// also stops the pointer vanishing mid-hover.
+	"mouse_hide_wait=0",
+	// there is no shell in this process.
+	"shell_integration=disabled",
+	"disable_ligatures=always",
+	"wayland_enable_ime=no",
+	"enable_audio_bell=no",
+	"cursor_blink_interval=0",
+	"default_pointer_shape=arrow",
 }
 
 const (
