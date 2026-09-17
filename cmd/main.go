@@ -305,6 +305,17 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 
 	mouseShape := vaxis.MouseShapeDefault
 
+	// pending is the one event pulled off the queue while collapsing a burst
+	// of pointer motion. It is handled on the next turn, so ordering holds.
+	var pending vaxis.Event
+	// lastHit is what the previous motion resolved to.
+	type hitState struct {
+		hit tui.Hit
+		ok  bool
+	}
+	var lastHit hitState
+	haveLastHit := false
+
 	render := func() {
 		tui.Render(win)
 		vx.Render()
@@ -322,67 +333,98 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 
 	render()
 
+	// handleScreen runs one terminal event and reports whether the bar
+	// should exit.
+	handleScreen := func(ev vaxis.Event) bool {
+		switch ev := ev.(type) {
+		case vaxis.Resize:
+			// vaxis only tracks the new geometry if we hand the event
+			// back; without this Window().Size() and the cell buffers
+			// stay at whatever init measured.
+			vx.Resize(ev)
+			menus.SetCellMetrics(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
+			setTextCell(vx.Size())
+			// A resize is how a mode or scale change on this output
+			// reaches the bar; the cached geometry is now stale.
+			monitor.Invalidate()
+			fullResize()
+			log.Debug().Msgf("panel size: %d, %d", ev.XPixel, ev.YPixel)
+		case vaxis.Redraw:
+			render()
+		case vaxis.ColorThemeUpdate:
+			// Indexed and default colours are resolved by asking the
+			// terminal, and it has just changed its mind.
+			tui.ForgetColors()
+			fullResize()
+		case vaxis.Key:
+			if ev.String() == "Ctrl+c" {
+				vx.PostEvent(vaxis.QuitEvent{})
+			}
+		case vaxis.FocusOut:
+			menus.PointerPresent(false)
+			engine.PointerLeft()
+			updateMouseShape(vx, vaxis.MouseShapeDefault, &mouseShape)
+			haveLastHit = false
+		case vaxis.Mouse:
+			if ev.EventType == vaxis.EventLeave {
+				menus.PointerPresent(false)
+				engine.PointerLeft()
+				updateMouseShape(vx, vaxis.MouseShapeDefault, &mouseShape)
+				haveLastHit = false
+				return false
+			}
+			if ev.EventType == vaxis.EventMotion {
+				ev = newestMotion(ev, screenEvents, &pending)
+			}
+			// The pointer is on this bar, so this is the bar whose menus
+			// can be opened next: the warm panels belong on this monitor.
+			menus.PointerPresent(true)
+			leftHalf := true
+			if sz := vx.Size(); sz.XPixel > 0 && sz.Cols > 0 {
+				// Pixel offset within the clicked cell; inverts
+				// vaxis's own Col = XPixel*Cols/XPixel_total.
+				rem := (ev.XPixel * sz.Cols) % sz.XPixel
+				leftHalf = rem*2 < sz.XPixel
+			}
+			hit, ok := tui.HitAt(ev.Col, leftHalf)
+			// Motion carries nothing downstream but the slot it landed on:
+			// engine.Mouse only reads the pixels on a press. So a move that
+			// resolves to the same slot has nothing left to tell anyone.
+			st := hitState{hit: hit, ok: ok}
+			if ev.EventType == vaxis.EventMotion && haveLastHit && st == lastHit {
+				return false
+			}
+			lastHit, haveLastHit = st, true
+			engine.Mouse(core.Side(hit.Side), hit.Index, hit.Region, ev, ok)
+			shape := vaxis.MouseShapeDefault
+			if ok {
+				shape = hit.Shape
+			}
+			updateMouseShape(vx, shape, &mouseShape)
+		case vaxis.QuitEvent:
+			log.Info().Msg("received exit signal")
+			return true
+		}
+		return false
+	}
+
 	// Menu panels come from the supervisor, which pools them for every bar;
 	// connect now that the bar is up so the first click does not pay for it.
 	menus.Connect()
 
 	for {
+		if pending != nil {
+			ev := pending
+			pending = nil
+			if handleScreen(ev) {
+				return 0
+			}
+			continue
+		}
+
 		select {
 		case ev := <-screenEvents:
-			switch ev := ev.(type) {
-			case vaxis.Resize:
-				// vaxis only tracks the new geometry if we hand the event
-				// back; without this Window().Size() and the cell buffers
-				// stay at whatever init measured.
-				vx.Resize(ev)
-				menus.SetCellMetrics(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
-				setTextCell(vx.Size())
-				// A resize is how a mode or scale change on this output
-				// reaches the bar; the cached geometry is now stale.
-				monitor.Invalidate()
-				fullResize()
-				log.Debug().Msgf("panel size: %d, %d", ev.XPixel, ev.YPixel)
-			case vaxis.Redraw:
-				render()
-			case vaxis.ColorThemeUpdate:
-				// Indexed and default colours are resolved by asking the
-				// terminal, and it has just changed its mind.
-				tui.ForgetColors()
-				fullResize()
-			case vaxis.Key:
-				if ev.String() == "Ctrl+c" {
-					vx.PostEvent(vaxis.QuitEvent{})
-				}
-			case vaxis.FocusOut:
-				menus.PointerPresent(false)
-				engine.PointerLeft()
-				updateMouseShape(vx, vaxis.MouseShapeDefault, &mouseShape)
-			case vaxis.Mouse:
-				if ev.EventType == vaxis.EventLeave {
-					menus.PointerPresent(false)
-					engine.PointerLeft()
-					updateMouseShape(vx, vaxis.MouseShapeDefault, &mouseShape)
-					continue
-				}
-				// The pointer is on this bar, so this is the bar whose menus
-				// can be opened next: the warm panels belong on this monitor.
-				menus.PointerPresent(true)
-				leftHalf := true
-				if sz := vx.Size(); sz.XPixel > 0 && sz.Cols > 0 {
-					// Pixel offset within the clicked cell; inverts
-					// vaxis's own Col = XPixel*Cols/XPixel_total.
-					rem := (ev.XPixel * sz.Cols) % sz.XPixel
-					leftHalf = rem*2 < sz.XPixel
-				}
-				hit, ok := tui.HitAt(ev.Col, leftHalf)
-				engine.Mouse(core.Side(hit.Side), hit.Index, hit.Region, ev, ok)
-				shape := vaxis.MouseShapeDefault
-				if ok {
-					shape = hit.Shape
-				}
-				updateMouseShape(vx, shape, &mouseShape)
-			case vaxis.QuitEvent:
-				log.Info().Msg("received exit signal")
+			if handleScreen(ev) {
 				return 0
 			}
 
@@ -470,4 +512,26 @@ func updateMouseShape(vx *vaxis.Vaxis, target vaxis.MouseShape, old *vaxis.Mouse
 	*old = target
 	vx.SetMouseShape(target)
 	vx.Render()
+}
+
+// newestMotion collapses a burst of pointer motion down to its latest event.
+// With modes 1003 and 1016 both on, kitty reports every compositor pointer
+// event, so a mouse polling at 1kHz wakes the bar a thousand times a second to
+// say the pointer is still over the clock. Newest wins, so nothing about where
+// the pointer actually is gets lost. The first event that is not motion is
+// stashed for the next turn rather than dropped.
+func newestMotion(ev vaxis.Mouse, q chan vaxis.Event, pending *vaxis.Event) vaxis.Mouse {
+	for {
+		select {
+		case next := <-q:
+			if m, ok := next.(vaxis.Mouse); ok && m.EventType == vaxis.EventMotion {
+				ev = m
+				continue
+			}
+			*pending = next
+			return ev
+		default:
+			return ev
+		}
+	}
 }
