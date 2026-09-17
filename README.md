@@ -24,7 +24,7 @@ Due to the existence of modern terminal standards (especially in kitty), a tiny 
 >   ```
 A basic install script is there (you need to compile pawbar before running the script): 
 ```sh
-go build .
+go build -tags kittyonly .
 ./install.sh
 ```
 Though fair caution it installs to `/usr/local/bin`

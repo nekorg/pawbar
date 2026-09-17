@@ -22,8 +22,12 @@ Clone and compile `pawbar`
 ```sh
 git clone --recurse-submodules https://github.com/nekorg/pawbar
 cd pawbar
-go build .
+go build -tags kittyonly .
 ```
+
+The `kittyonly` tag drops the terminal compatibility layer, which pawbar has no
+use for: it only ever runs inside a kitty it spawned itself. Building without it
+still works and is what you want if you are testing against upstream vaxis.
 
 Install using the installation script:
 ```sh

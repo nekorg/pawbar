@@ -26,6 +26,9 @@
           version = "0-unstable-2025-08-31";
           src = ./.;
           subPackages = [ "cmd/pawbar" ];
+          # pawbar only ever runs inside a kitty it spawned itself, so the
+          # terminal compatibility layer in vaxis is dead weight
+          tags = [ "kittyonly" ];
           vendorHash = "sha256-DUjfFrmpjSUWDicncTXvL1mnnPqEEKGyz6PTLEnGD7E=";
           buildInputs = with pkgs; [
             udev
