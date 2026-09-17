@@ -499,9 +499,15 @@ func (sp *Spare) awaitReady(seam func(*Spare) bool) bool {
 	}
 }
 
-// shutdown asks the panel to exit and escalates to SIGKILL if it does not,
+// shutdown asks the panel to exit and escalates to a kill if it does not,
 // returning once the process has been reaped.
+//
+// Asking happens twice over, because a spare waiting for its next menu is
+// blocked on the wire: the signal only reaches it through vaxis, which
+// catches it and posts an event, so the in-band MsgClose is the one that
+// gets read first. Both are cheap and neither blocks this goroutine.
 func (sp *Spare) shutdown() {
+	sp.tell(wire.Msg{Type: wire.MsgClose})
 	sp.panel.Stop()
 	select {
 	case <-sp.done:
@@ -515,6 +521,17 @@ func (sp *Spare) shutdown() {
 	case <-time.After(killWait):
 		logging.Log.Error().Msg("menus: panel survived kill")
 	}
+}
+
+// tell writes one message to the panel without waiting for it. The wire
+// blocks a writer whose reader has stopped, and this is called on exactly
+// the panels that may have, so it never runs on the caller's goroutine.
+func (sp *Spare) tell(m wire.Msg) {
+	w := sp.panel.Writer()
+	if w == nil {
+		return
+	}
+	go cbor.NewEncoder(w).Encode(m)
 }
 
 // alive reports whether the panel process is still there.

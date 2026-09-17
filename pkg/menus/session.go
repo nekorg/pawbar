@@ -14,6 +14,7 @@ import (
 	l "log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -88,6 +89,11 @@ type Session struct {
 	// revealed guards the one-time on-screen reveal (Move) on first paint.
 	// Touched only by the app goroutine (the sole caller of Render).
 	revealed bool
+
+	// quit records that this process was told to go, rather than just to
+	// close its menu: the terminal quit, or the wire ended. runHost then
+	// exits instead of parking for a next menu that is never coming.
+	quit atomic.Bool
 
 	geoMu sync.Mutex
 	geo   wire.Geometry
@@ -204,9 +210,11 @@ func (s *Session) park() {
 	s.vx.Render()
 	drainEvents(s.vx)
 
-	s.k.Resize(warmCols, warmRows)
-	if r, ok := awaitResize(s.vx, warmCols, warmRows, mapWait); ok {
-		s.vx.Resize(r)
+	if c, r := s.vx.Window().Size(); c != warmCols || r != warmRows {
+		s.k.Resize(warmCols, warmRows)
+		if ev, ok := awaitResize(s.vx, warmCols, warmRows, mapWait); ok {
+			s.vx.Resize(ev)
+		}
 	}
 }
 
@@ -418,6 +426,11 @@ func runHost(k *katnip.Kitty, rw io.ReadWriter) int {
 			return code
 		}
 		s.finish()
+		if s.quit.Load() {
+			// Not a menu close: the terminal or the wire is gone, so there
+			// is nothing to park for and nobody left to tell.
+			return code
+		}
 		s.park()
 		// The bar reads this and lets go of the wire; whoever owns the panel
 		// takes it back from there.
@@ -458,6 +471,9 @@ func (s *Session) hostLoop(vx *vaxis.Vaxis, ctrl <-chan wire.Msg) {
 				}
 				continue
 			case vaxis.QuitEvent:
+				// The terminal is gone (a signal reached vaxis, which closes
+				// itself rather than exiting). Nothing can be drawn again.
+				s.quit.Store(true)
 				return
 			}
 			select {
@@ -468,6 +484,7 @@ func (s *Session) hostLoop(vx *vaxis.Vaxis, ctrl <-chan wire.Msg) {
 		case m, ok := <-ctrl:
 			if !ok {
 				// Wire gone: the bar died or tore the stream down.
+				s.quit.Store(true)
 				return
 			}
 			if m.Type == wire.MsgClose {
@@ -505,12 +522,18 @@ func awaitResize(vx *vaxis.Vaxis, cols, rows int, timeout time.Duration) (vaxis.
 
 // waitOpen blocks until the bar sends MsgOpen, draining vaxis events in the
 // meantime so an idle spare never stalls vaxis. Returns false if the wire
-// closes or MsgClose arrives first.
+// closes, MsgClose arrives, or the terminal quits.
 func waitOpen(vx *vaxis.Vaxis, ctrl <-chan wire.Msg) (wire.Msg, bool) {
 	for {
 		select {
-		case <-vx.Events():
-			// discard while idle/off-screen
+		case ev := <-vx.Events():
+			// A signal does not exit this process: vaxis catches it and
+			// posts this instead. Discarding it here is what left a culled
+			// spare alive until the pool escalated to a kill.
+			if _, ok := ev.(vaxis.QuitEvent); ok {
+				return wire.Msg{}, false
+			}
+			// anything else is noise while idle/off-screen
 		case m, ok := <-ctrl:
 			if !ok || m.Type == wire.MsgClose {
 				return wire.Msg{}, false

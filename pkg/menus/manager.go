@@ -29,10 +29,16 @@ const (
 	// rendered off-screen and moved on-screen with exclusive focus.
 	// Warm spares are pre-mapped, so this only covers the ~200ms reveal.
 	spawnFocusGrace = 1 * time.Second
-	// closeWait bounds how long we wait for a panel to exit after
-	// MsgClose+Stop before killing it.
+	// closeWait bounds how long the panel's owner waits for the process to
+	// exit after MsgClose+Stop before killing it.
 	closeWait = 500 * time.Millisecond
 	killWait  = 200 * time.Millisecond
+	// parkWait bounds how long the bar waits for a closing panel to park
+	// itself and hand the wire back. It has to clear the park's own worst
+	// case (a resize round-trip, mapWait) with room to spare: releasing
+	// early tells the owner the panel is wedged, and a healthy one is then
+	// killed and respawned for nothing.
+	parkWait = 3 * time.Second
 )
 
 // owner identifies who opened a menu, for toggle and one-at-a-time
@@ -172,7 +178,7 @@ func (t *tree) spawn(p *panelConn, kind string, wCells, hCells int, geo wire.Geo
 }
 
 // close tears the whole tree down, deepest panel first. Idempotent and
-// bounded: a wedged panel is killed after closeWait.
+// bounded: a wedged panel is killed after parkWait.
 func (t *tree) close() {
 	t.mu.Lock()
 	if t.closed {
@@ -308,6 +314,10 @@ type Handle struct {
 	tree  *tree
 	encMu sync.Mutex
 	gone  bool // wire dropped; guarded by encMu
+	// closing is the escalation armed by shutdown, stopped once the panel
+	// has actually let go. Guarded by timerMu.
+	timerMu sync.Mutex
+	closing *time.Timer
 	// warm records that the panel parked itself rather than died. Written
 	// by read, read by exited, which is read's own defer.
 	warm   bool
@@ -380,7 +390,11 @@ func (h *Handle) Geometry() wire.Geometry {
 // it, which ends the wire and gets here the other way.
 func (h *Handle) shutdown() {
 	h.Send(wire.Msg{Type: wire.MsgClose})
-	time.AfterFunc(closeWait, func() { h.conn.release(false) })
+	h.timerMu.Lock()
+	if h.closing == nil {
+		h.closing = time.AfterFunc(parkWait, func() { h.conn.release(false) })
+	}
+	h.timerMu.Unlock()
 }
 
 // read pumps child->parent messages: lifecycle ones go to the tree,
@@ -445,6 +459,13 @@ func (h *Handle) read() {
 // unmapping safe and what lets the owner read the wire next.
 func (h *Handle) exited() {
 	close(h.done)
+
+	// The panel let go on its own, so the escalation has nothing left to do.
+	h.timerMu.Lock()
+	if h.closing != nil {
+		h.closing.Stop()
+	}
+	h.timerMu.Unlock()
 
 	h.encMu.Lock()
 	h.gone = true
