@@ -16,13 +16,13 @@ import (
 )
 
 func TestWireLevelAssignsUniqueResolvableIDs(t *testing.T) {
-	c := &listCtrl{reg: make(map[int32]listEntry)}
+	c := newListCtrl()
 	level := []Item{
 		{Label: "one"},
 		{Label: "two", Submenu: []Item{{Label: "child"}}},
 		{Separator: true},
 	}
-	wi := c.wireLevel(level)
+	wi := c.wireLevel(rootLevel, level)
 	if len(wi) != 3 {
 		t.Fatalf("wire items = %d, want 3", len(wi))
 	}
@@ -49,14 +49,14 @@ func TestWireLevelAssignsUniqueResolvableIDs(t *testing.T) {
 }
 
 func TestApplyToggleRadioFlipsSiblings(t *testing.T) {
-	c := &listCtrl{reg: make(map[int32]listEntry)}
+	c := newListCtrl()
 	level := []Item{
 		{Label: "a", Toggle: ToggleRadio, Checked: true},
 		{Label: "b", Toggle: ToggleRadio},
 		{Label: "plain"},
 		{Label: "c", Toggle: ToggleRadio},
 	}
-	wi := c.wireLevel(level)
+	wi := c.wireLevel(rootLevel, level)
 	e, _ := c.lookup(wi[3].ID)
 	c.applyToggle(e)
 	want := []bool{false, false, false, true}
@@ -68,9 +68,9 @@ func TestApplyToggleRadioFlipsSiblings(t *testing.T) {
 }
 
 func TestApplyToggleCheckFlips(t *testing.T) {
-	c := &listCtrl{reg: make(map[int32]listEntry)}
+	c := newListCtrl()
 	level := []Item{{Label: "a", Toggle: ToggleCheck}}
-	wi := c.wireLevel(level)
+	wi := c.wireLevel(rootLevel, level)
 	e, _ := c.lookup(wi[0].ID)
 	c.applyToggle(e)
 	if !level[0].Checked {
@@ -137,5 +137,44 @@ func TestWireMsgRoundTrip(t *testing.T) {
 	}
 	if *out.Geo != geo {
 		t.Errorf("geometry mangled: %+v", *out.Geo)
+	}
+}
+
+func TestWireLevelRetiresTheIDsItReplaces(t *testing.T) {
+	c := newListCtrl()
+	level := []Item{{Label: "a"}, {Label: "b"}}
+	old := c.wireLevel(rootLevel, level)
+
+	for range 20 {
+		c.wireLevel(rootLevel, []Item{{Label: "a"}, {Label: "b"}})
+	}
+	if len(c.reg) != 2 {
+		t.Errorf("registry holds %d ids after 20 refreshes, want 2", len(c.reg))
+	}
+	for _, w := range old {
+		if _, ok := c.lookup(w.ID); ok {
+			t.Errorf("retired id %d still resolves", w.ID)
+		}
+	}
+}
+
+func TestSubmenuLevelsAreIndependent(t *testing.T) {
+	c := newListCtrl()
+	root := c.wireLevel(rootLevel, []Item{{Label: "parent", HasSubmenu: true}})
+	sub := c.newLevel()
+	c.wireLevel(sub, []Item{{Label: "child"}})
+
+	if _, _, ok := c.item(root[0].ID); !ok {
+		t.Error("registering a submenu retired the root's ids")
+	}
+	// Refreshing the root must not disturb the open submenu's registrations.
+	c.wireLevel(rootLevel, []Item{{Label: "parent", HasSubmenu: true}})
+	if st := c.levels[sub]; st == nil || len(st.ids) != 1 {
+		t.Error("root refresh dropped the submenu level")
+	}
+
+	c.drop(sub)
+	if _, ok := c.levels[sub]; ok {
+		t.Error("dropped level still present")
 	}
 }
