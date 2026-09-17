@@ -229,7 +229,15 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 		return 1
 	}
 
-	vx, err := vaxis.New(vaxis.Options{EnableSGRPixels: true})
+	vx, err := vaxis.New(vaxis.Options{
+		EnableSGRPixels: true,
+		// pawbar spawns this kitty itself, so there is nothing to detect.
+		KittyOnly: true,
+		// the bar's panel is FocusNotAllowed and handles one key, Ctrl+c,
+		// which arrives as a plain C0 either way. Menu hosts do need the
+		// protocol; see pkg/menus.
+		DisableKittyKeyboard: true,
+	})
 	if err != nil {
 		log.Error().Msgf("initializing vaxis: %v", err)
 		return 1

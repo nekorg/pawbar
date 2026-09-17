@@ -316,6 +316,9 @@ func runHost(k *katnip.Kitty, rw io.ReadWriter) int {
 	vx, err := vaxis.New(vaxis.Options{
 		WithTTY:         os.Stdout.Name(),
 		EnableSGRPixels: true,
+		// the host spawns this kitty itself. The keyboard protocol stays:
+		// menus read arrows, j/k, Enter and Esc, and rely on EventPress.
+		KittyOnly: true,
 	})
 	if err != nil {
 		return 1
