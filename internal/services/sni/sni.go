@@ -7,6 +7,7 @@
 package sni
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"os"
@@ -30,6 +31,23 @@ const (
 	pathWatcher = dbus.ObjectPath("/StatusNotifierWatcher")
 	pathHost    = dbus.ObjectPath("/StatusNotifierHost")
 )
+
+const (
+	// callTimeout bounds a call into a tray app. These run on the click
+	// path and on the watcher's own goroutines, and an applet that stops
+	// answering must not take either with it.
+	callTimeout = 2 * time.Second
+	// healthMisses is how many probes in a row an item has to miss before
+	// it counts as gone.
+	healthMisses = 3
+)
+
+// call makes a bounded method call on a tray item.
+func call(obj dbus.BusObject, method string, args ...any) *dbus.Call {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	return obj.CallWithContext(ctx, method, 0, args...)
+}
 
 type EventKind int
 
@@ -1027,6 +1045,22 @@ func decodePixmap(v dbus.Variant) image.Image {
 	return img
 }
 
+// itemSignals are the SNI change notifications this host acts on, and the
+// properties each one says have gone stale. They are bare announcements, so
+// the value has to be read back. Qt and libappindicator items signal this
+// way instead of through PropertiesChanged, and an item watched only for
+// that one never updates its status or title.
+//
+// NewToolTip is left out on purpose: nothing here renders a tooltip.
+var itemSignals = map[string][]string{
+	"NewTitle":         {"Title"},
+	"NewIcon":          {"IconName", "IconPixmap"},
+	"NewAttentionIcon": {"AttentionIconName"},
+	"NewOverlayIcon":   {"OverlayIconName"},
+	"NewStatus":        {"Status"},
+	"NewIconThemePath": {"IconThemePath"},
+}
+
 func (s *Service) watchItemProps(it *Item, done <-chan struct{}) {
 	defer logging.Recover("sni.watchItemProps")
 	sender := it.BusName
@@ -1037,19 +1071,23 @@ func (s *Service) watchItemProps(it *Item, done <-chan struct{}) {
 		}
 	}
 
-	propsRule := fmt.Sprintf("type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='%s',sender='%s'",
-		it.Path, sender)
-	iconRule := fmt.Sprintf("type='signal',interface='%s',member='NewIcon',path='%s',sender='%s'",
-		ifaceItem, it.Path, sender)
-	s.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, propsRule)
-	s.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, iconRule)
+	rules := []string{fmt.Sprintf("type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='%s',sender='%s'",
+		it.Path, sender)}
+	for member := range itemSignals {
+		rules = append(rules, fmt.Sprintf("type='signal',interface='%s',member='%s',path='%s',sender='%s'",
+			ifaceItem, member, it.Path, sender))
+	}
+	for _, rule := range rules {
+		s.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, rule)
+	}
 
 	ch := make(chan *dbus.Signal, 16)
 	s.conn.Signal(ch)
 	defer func() {
 		s.conn.RemoveSignal(ch)
-		s.conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, propsRule)
-		s.conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, iconRule)
+		for _, rule := range rules {
+			s.conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, rule)
+		}
 	}()
 
 	for {
@@ -1066,8 +1104,7 @@ func (s *Service) watchItemProps(it *Item, done <-chan struct{}) {
 				continue
 			}
 
-			switch sig.Name {
-			case "org.freedesktop.DBus.Properties.PropertiesChanged":
+			if sig.Name == "org.freedesktop.DBus.Properties.PropertiesChanged" {
 				if len(sig.Body) < 2 {
 					continue
 				}
@@ -1077,21 +1114,27 @@ func (s *Service) watchItemProps(it *Item, done <-chan struct{}) {
 				}
 				changed, _ := sig.Body[1].(map[string]dbus.Variant)
 				s.applyChanges(it, changed)
-			case ifaceItem + ".NewIcon":
-				s.refreshIcon(it)
+				continue
+			}
+			member, ok := strings.CutPrefix(sig.Name, ifaceItem+".")
+			if !ok {
+				continue
+			}
+			if names := itemSignals[member]; len(names) != 0 {
+				s.refreshProps(it, names...)
 			}
 		}
 	}
 }
 
-// refreshIcon rereads the properties covered by NewIcon, whose signal has no
-// payload, and applies them through the normal item-change path.
-func (s *Service) refreshIcon(it *Item) {
+// refreshProps rereads the properties a change signal named but did not
+// carry, and applies them through the normal item-change path.
+func (s *Service) refreshProps(it *Item, names ...string) {
 	obj := s.conn.Object(it.BusName, it.Path)
-	changed := make(map[string]dbus.Variant, 2)
-	for _, name := range []string{"IconName", "IconPixmap"} {
+	changed := make(map[string]dbus.Variant, len(names))
+	for _, name := range names {
 		var v dbus.Variant
-		if err := obj.Call("org.freedesktop.DBus.Properties.Get", 0, ifaceItem, name).Store(&v); err == nil {
+		if err := call(obj, "org.freedesktop.DBus.Properties.Get", ifaceItem, name).Store(&v); err == nil {
 			changed[name] = v
 		}
 	}
@@ -1143,6 +1186,7 @@ func (s *Service) monitorItemBus(it *Item, done <-chan struct{}) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
+	misses := 0
 	for {
 		select {
 		case <-s.stop:
@@ -1163,11 +1207,22 @@ func (s *Service) monitorItemBus(it *Item, done <-chan struct{}) {
 				return
 			}
 
-			if !s.itemStillExists(it) {
-				logging.Log.Warn().Msgf("sni: item %s no longer exists (health check failed)", key)
-				s.removeByKey(key)
-				return
+			if s.itemStillExists(it) {
+				misses = 0
+				continue
 			}
+			// One missed probe is not evidence of death: a busy applet can
+			// blow the reply deadline and be back by the next tick. Taking
+			// its icon away for that is worse than noticing a real death a
+			// few seconds later.
+			misses++
+			if misses < healthMisses {
+				logging.Log.Debug().Msgf("sni: item %s missed health check %d/%d", key, misses, healthMisses)
+				continue
+			}
+			logging.Log.Warn().Msgf("sni: item %s no longer exists (health check failed)", key)
+			s.removeByKey(key)
+			return
 
 		case sig := <-ch:
 			if sig == nil {
@@ -1198,8 +1253,8 @@ func (s *Service) monitorItemBus(it *Item, done <-chan struct{}) {
 func (s *Service) itemStillExists(it *Item) bool {
 	// Try to ping the item by getting a property
 	var v dbus.Variant
-	err := s.conn.Object(it.BusName, it.Path).Call(
-		"org.freedesktop.DBus.Properties.Get", 0, ifaceItem, "Id",
+	err := call(s.conn.Object(it.BusName, it.Path),
+		"org.freedesktop.DBus.Properties.Get", ifaceItem, "Id",
 	).Store(&v)
 	return err == nil
 }
@@ -1307,17 +1362,17 @@ func (s *Service) Items() []Item {
 }
 
 func (s *Service) Activate(it Item, x, y int32) error {
-	return s.conn.Object(it.BusName, it.Path).Call(ifaceItem+".Activate", 0, x, y).Err
+	return call(s.conn.Object(it.BusName, it.Path), ifaceItem+".Activate", x, y).Err
 }
 
 func (s *Service) SecondaryActivate(it Item, x, y int32) error {
-	return s.conn.Object(it.BusName, it.Path).Call(ifaceItem+".SecondaryActivate", 0, x, y).Err
+	return call(s.conn.Object(it.BusName, it.Path), ifaceItem+".SecondaryActivate", x, y).Err
 }
 
 func (s *Service) ContextMenu(it Item, x, y int32) error {
-	return s.conn.Object(it.BusName, it.Path).Call(ifaceItem+".ContextMenu", 0, x, y).Err
+	return call(s.conn.Object(it.BusName, it.Path), ifaceItem+".ContextMenu", x, y).Err
 }
 
 func (s *Service) Scroll(it Item, delta int32, orientation string) error {
-	return s.conn.Object(it.BusName, it.Path).Call(ifaceItem+".Scroll", 0, delta, orientation).Err
+	return call(s.conn.Object(it.BusName, it.Path), ifaceItem+".Scroll", delta, orientation).Err
 }
