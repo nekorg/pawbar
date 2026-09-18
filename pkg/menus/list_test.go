@@ -111,8 +111,31 @@ func TestListDims(t *testing.T) {
 	}
 }
 
+func TestListDimsMeasuresCellsNotBytes(t *testing.T) {
+	pad := gutterCells + rightPadCells
+	cases := []struct {
+		label string
+		cells int
+	}{
+		{"plain ascii", 11},
+		{"café", 4}, // 5 bytes, 4 cells
+		{"日本語", 6},  // 9 bytes, 3 double-width graphemes
+		{"a日b", 4},  // mixed
+	}
+	for _, c := range cases {
+		w, _ := listDims([]wire.Item{{Label: c.label}})
+		if want := c.cells + pad; w != want {
+			t.Errorf("listDims(%q) width = %d, want %d", c.label, w, want)
+		}
+	}
+}
+
 func TestWireMsgRoundTrip(t *testing.T) {
-	geo := wire.Geometry{MonW: 1000, MonH: 500, PanelX: 12, PanelY: 34, PPCX: 10.5, PPCY: 21.25, Scale: 2, Pad: 2}
+	geo := wire.Geometry{
+		MonW: 1000, MonH: 500, PanelX: 12, PanelY: 34,
+		PPCX: 10.5, PPCY: 21.25, Scale: 2, Pad: 2,
+		ParentX: 4, ParentY: 6, ParentW: 18, Row: 7,
+	}
 	in := wire.Msg{
 		Type: wire.MsgUpdate,
 		Items: []wire.Item{

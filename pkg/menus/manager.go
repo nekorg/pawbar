@@ -87,7 +87,7 @@ func openRoot(o owner, name string, at Anchor, wCells, hCells int, autoClose boo
 	}
 	_, _, geo := clampRoot(at, wCells, hCells)
 	t := &tree{owner: o, autoClose: autoClose, focused: make(map[*Handle]bool)}
-	h, err := t.spawn(p, name, wCells, hCells, geo)
+	h, err := t.spawn(p, name, wCells, hCells, 0, geo)
 	if err != nil {
 		p.release(false)
 		p.free()
@@ -147,7 +147,7 @@ type tree struct {
 // spawn assigns an acquired panel a menu (kind, size, placement) via MsgOpen
 // and appends it to the tree. The caller then streams content (MsgUpdate),
 // which the host renders off-screen before revealing itself on-screen.
-func (t *tree) spawn(p *panelConn, kind string, wCells, hCells int, geo wire.Geometry) (*Handle, error) {
+func (t *tree) spawn(p *panelConn, kind string, wCells, hCells, subRow int, geo wire.Geometry) (*Handle, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -168,6 +168,7 @@ func (t *tree) spawn(p *panelConn, kind string, wCells, hCells int, geo wire.Geo
 		geo:    geo,
 		wCells: wCells,
 		hCells: hCells,
+		subRow: subRow,
 	}
 	if err := h.Send(wire.Msg{Type: wire.MsgOpen, Kind: kind, Geo: &geo, Cols: wCells, Rows: hCells}); err != nil {
 		logging.Log.Warn().Msgf("menus: sending open: %v", err)
@@ -224,6 +225,51 @@ func (t *tree) closeBelow(h *Handle) {
 
 	for i := len(deeper) - 1; i >= 0; i-- {
 		deeper[i].shutdown()
+	}
+}
+
+// replaceBelow re-places every panel deeper than h, after h moved or changed
+// size. A submenu is positioned against its parent's edge and rows, so a
+// parent that resized leaves its whole chain hanging off an edge that is no
+// longer there.
+func (t *tree) replaceBelow(h *Handle) {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return
+	}
+	idx := -1
+	for i, p := range t.panels {
+		if p == h {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 || idx == len(t.panels)-1 {
+		t.mu.Unlock()
+		return
+	}
+	chain := append([]*Handle(nil), t.panels[idx:]...)
+	t.mu.Unlock()
+
+	for i := 1; i < len(chain); i++ {
+		parent, child := chain[i-1], chain[i]
+
+		parent.geoMu.Lock()
+		pGeo, pW := parent.geo, parent.wCells
+		parent.geoMu.Unlock()
+
+		child.geoMu.Lock()
+		_, _, geo := placeSubmenu(pGeo, pW, child.subRow, child.wCells, child.hCells)
+		if geo == child.geo {
+			// Nothing moved here, so nothing below it moved either.
+			child.geoMu.Unlock()
+			return
+		}
+		child.geo = geo
+		child.geoMu.Unlock()
+
+		child.Send(wire.Msg{Type: wire.MsgPlace, Geo: &geo})
 	}
 }
 
@@ -320,13 +366,17 @@ type Handle struct {
 	closing *time.Timer
 	// warm records that the panel parked itself rather than died. Written
 	// by read, read by exited, which is read's own defer.
-	warm   bool
-	msgs   chan wire.Msg
-	done   chan struct{}
-	geoMu  sync.Mutex
-	geo    wire.Geometry
+	warm  bool
+	msgs  chan wire.Msg
+	done  chan struct{}
+	geoMu sync.Mutex
+	geo   wire.Geometry
+	// wCells/hCells are the panel's current size and subRow the parent row
+	// it hangs off (meaningless on the root). Together they are what
+	// re-placing the chain below a resized panel needs.
 	wCells int
 	hCells int
+	subRow int
 }
 
 // Send delivers a message to the panel.
@@ -365,7 +415,7 @@ func (h *Handle) OpenSub(name string, row, wCells, hCells int) (*Handle, error) 
 	if err != nil {
 		return nil, err
 	}
-	sub, err := h.tree.spawn(p, name, wCells, hCells, subGeo)
+	sub, err := h.tree.spawn(p, name, wCells, hCells, row, subGeo)
 	if err != nil {
 		p.release(false)
 		p.free()
@@ -435,6 +485,7 @@ func (h *Handle) read() {
 				h.hCells = m.Rows
 			}
 			h.geoMu.Unlock()
+			h.tree.replaceBelow(h)
 		default:
 			if m.Type == wire.MsgSubmenuReq && m.Geo != nil && m.Geo.PPCX > 0 && m.Geo.PPCY > 0 {
 				// The panel measured its own cell metrics; they beat the

@@ -46,6 +46,11 @@ type listState struct {
 	openID     int32
 	openRow    int
 
+	// placed records that this panel has re-clamped itself once against
+	// its own cell metrics, which is all a panel at an unchanged size ever
+	// needs.
+	placed bool
+
 	send func(wire.Msg)                   // to the bar
 	req  func(id int32, row int) wire.Msg // submenu request, with this panel's metrics
 }
@@ -361,14 +366,21 @@ func listApp(s *Session) int {
 			draw(true)
 			w, h := listDims(st.items)
 			cols, rows := r.win.Size()
-			if cols != w || rows != h {
+			switch {
+			case cols != w || rows != h:
 				s.Resize(w, h)
-			} else {
-				// Already the right size (root spawns at its final size),
-				// but the bar's initial placement may overflow with a
-				// different font; re-clamp against our own metrics.
+			case !st.placed:
+				// A root spawns at its final size, so Resize never fires to
+				// correct a placement the bar made with its own cell
+				// metrics. Do that once, here.
 				s.Reposition(cols, rows)
 			}
+			// Every later update at the same size has nothing to re-place,
+			// and moving a panel to where it already is still raises it:
+			// the root refreshes the moment a submenu's AboutToShow makes
+			// its applet rebuild, which would put it back over the submenu
+			// that just opened in front of it.
+			st.placed = true
 		}
 	}
 }

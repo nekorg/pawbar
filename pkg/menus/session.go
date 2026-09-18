@@ -87,8 +87,9 @@ type Session struct {
 	finished chan struct{}
 
 	// revealed guards the one-time on-screen reveal (Move) on first paint.
-	// Touched only by the app goroutine (the sole caller of Render).
-	revealed bool
+	// Written by the app goroutine (the sole caller of Render); hostLoop
+	// reads it to know whether a placement update has anything to move.
+	revealed atomic.Bool
 
 	// quit records that this process was told to go, rather than just to
 	// close its menu: the terminal quit, or the wire ended. runHost then
@@ -141,8 +142,8 @@ func (s *Session) Foreground() color.RGBA { return s.fg }
 // blank flash) and grants it keyboard focus.
 func (s *Session) Render() {
 	s.vx.Render()
-	if !s.revealed {
-		s.revealed = true
+	if !s.revealed.Load() {
+		s.revealed.Store(true)
 		// Reveal at the bar's clamped position. The bar computed it with
 		// correct on-screen cell metrics; the spare measured itself while
 		// parked off-screen (a different/absent output scale), so its own
@@ -253,24 +254,42 @@ func (s *Session) setGeometry(g wire.Geometry) {
 	s.geoMu.Unlock()
 }
 
-// reclampPos computes an on-screen-clamped position for a cols x rows
-// panel using this panel's own measured cell metrics — the ground truth
-// for the surface actually on screen, which the bar's initial estimate
-// (made with the bar's font, not the panel's pinned one) can miss. It
-// reports whether the result differs from the current placement.
-func (s *Session) reclampPos(cols, rows int) (int, int, wire.Geometry, bool) {
+// place recomputes where this panel belongs at cols x rows by re-running
+// the placement it was opened with, rather than clamping wherever it
+// happens to sit: a clamp is a no-op whenever the panel still fits, so a
+// menu that shrank would keep the position its widest content forced on
+// it, and a submenu flipped to its parent's left would hold its left edge
+// still while the edge that has to stay flush is the right one.
+//
+// It reports whether the result differs from the current placement.
+func (s *Session) place(cols, rows int) (int, int, wire.Geometry, bool) {
 	geo := s.Geometry()
 	if geo.MonW <= 0 || geo.Scale <= 0 {
 		return geo.PanelX, geo.PanelY, geo, false
 	}
-	ppcX, ppcY := geo.PPCX, geo.PPCY
-	if mx, my := s.MeasuredPPC(); mx > 0 && my > 0 {
-		ppcX, ppcY = mx, my
+
+	var x, y int
+	if geo.IsSub() {
+		// Re-run the bar's own arithmetic, on the metrics it used. A
+		// submenu's x is the parent's width away from the parent's left
+		// edge, and this panel's measurement describes this panel's
+		// surface: folding it into a parent-sized span puts the submenu
+		// a fraction of a cell out per parent cell, which is what pulled
+		// it over the edge it is supposed to sit flush against.
+		parent := geo
+		parent.PanelX, parent.PanelY = geo.ParentX, geo.ParentY
+		x, y, _ = placeSubmenu(parent, geo.ParentW, geo.Row, cols, rows)
+	} else {
+		// A root is placed against a click rather than another panel, so
+		// the only span measured here is this panel's own box, and its
+		// own metrics are the ground truth for that — the bar's estimate
+		// was made with the bar's font, not the panel's pinned one.
+		m := geo
+		if mx, my := s.MeasuredPPC(); mx > 0 && my > 0 {
+			m.PPCX, m.PPCY = mx, my
+		}
+		x, y = clampAt(m.AnchorX, m.AnchorY, cols, rows, m)
 	}
-	w := cellsToLogical(cols, ppcX, geo.Scale) + 2*geo.Pad
-	h := cellsToLogical(rows, ppcY, geo.Scale) + 2*geo.Pad
-	x := clamp(geo.PanelX, 0, geo.MonW-w)
-	y := clamp(geo.PanelY, 0, geo.MonH-h)
 	return x, y, geo, x != geo.PanelX || y != geo.PanelY
 }
 
@@ -281,11 +300,11 @@ func (s *Session) applyMove(x, y int, geo wire.Geometry, cols, rows int) {
 	s.Send(wire.Msg{Type: wire.MsgResized, Cols: cols, Rows: rows, Geo: &geo})
 }
 
-// Resize grows or shrinks the panel to cols x rows, moving it first if
-// the new size would clip off the monitor. It reports the resulting
-// placement back to the bar so submenu math stays accurate.
+// Resize grows or shrinks the panel to cols x rows, re-placing it first if
+// the new size belongs somewhere else. It reports the resulting placement
+// back to the bar so submenu math stays accurate.
 func (s *Session) Resize(cols, rows int) {
-	x, y, geo, moved := s.reclampPos(cols, rows)
+	x, y, geo, moved := s.place(cols, rows)
 	if moved {
 		s.k.Move(x, y)
 		geo.PanelX, geo.PanelY = x, y
@@ -295,12 +314,12 @@ func (s *Session) Resize(cols, rows int) {
 	s.Send(wire.Msg{Type: wire.MsgResized, Cols: cols, Rows: rows, Geo: &geo})
 }
 
-// Reposition re-clamps the panel to the monitor without resizing it. The
-// root menu is spawned at its final cell size, so Resize never fires to
-// correct an initial placement made with the bar's (possibly mismatched)
-// cell metrics; the child calls this once it knows its true size.
+// Reposition re-places the panel without resizing it. The root menu is
+// spawned at its final cell size, so Resize never fires to correct an
+// initial placement made with the bar's (possibly mismatched) cell
+// metrics; the child calls this once it knows its true size.
 func (s *Session) Reposition(cols, rows int) {
-	if x, y, geo, moved := s.reclampPos(cols, rows); moved {
+	if x, y, geo, moved := s.place(cols, rows); moved {
 		s.applyMove(x, y, geo, cols, rows)
 	}
 }
@@ -495,6 +514,16 @@ func (s *Session) hostLoop(vx *vaxis.Vaxis, ctrl <-chan wire.Msg) {
 			}
 			if m.Geo != nil {
 				s.setGeometry(*m.Geo)
+			}
+			if m.Type == wire.MsgPlace {
+				// What this panel hangs off moved or changed width, so the
+				// bar re-ran the placement for us. Lifecycle, not content:
+				// the menu app never sees it. A panel still off-screen needs
+				// no move — its reveal reads the geometry just stored.
+				if m.Geo != nil && s.revealed.Load() {
+					s.k.Move(m.Geo.PanelX, m.Geo.PanelY)
+				}
+				continue
 			}
 			select {
 			case s.msgs <- m:

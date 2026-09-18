@@ -14,6 +14,7 @@ import (
 	"github.com/nekorg/pawbar/internal/logging"
 	"github.com/nekorg/pawbar/pkg/menus/wire"
 	"github.com/nekorg/pawbar/pkg/module"
+	"go.rockorager.dev/vaxis"
 )
 
 // Toggle marks for list items.
@@ -495,7 +496,7 @@ func (c *listCtrl) run(h *Handle, lvl int32) {
 func listDims(items []wire.Item) (int, int) {
 	maxLen := 0
 	for _, it := range items {
-		if n := len(it.Label); n > maxLen {
+		if n := labelCells(it.Label); n > maxLen {
 			maxLen = n
 		}
 	}
@@ -505,4 +506,29 @@ func listDims(items []wire.Item) (int, int) {
 		h = 1
 	}
 	return w, h
+}
+
+// labelCells is a label's width in terminal cells. Byte length is not it:
+// a CJK grapheme takes two cells and three bytes, and every menu here is
+// sized from this number.
+func labelCells(s string) int {
+	if isASCII(s) {
+		return len(s)
+	}
+	n := 0
+	it := vaxis.NewCharacterIterator(s)
+	for c, ok := it.Next(); ok; c, ok = it.Next() {
+		n += c.Width
+	}
+	return n
+}
+
+// isASCII reports whether s is plain ascii, where one byte is one cell.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }

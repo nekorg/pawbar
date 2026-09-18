@@ -16,6 +16,7 @@ const (
 	MsgUpdate MsgType = iota // replace the item list (and optionally geometry)
 	MsgClose                 // exit now
 	MsgOpen                  // become Kind, size to Cols x Rows, reveal at Geo
+	MsgPlace                 // move to Geo; sent when what this panel hangs off moved or resized
 
 	// child -> parent
 	MsgClicked       // item activated (click or Enter)
@@ -53,16 +54,30 @@ type Item struct {
 	IconData   []byte // raw png, wins over IconPath
 }
 
-// Geometry gives a panel everything it needs to keep itself on-screen
-// after a live resize. All lengths are compositor-logical units except
-// the pixels-per-cell pair, which is physical.
+// Geometry gives a panel everything it needs to place itself after a live
+// resize. All lengths are compositor-logical units except the
+// pixels-per-cell pair, which is physical.
+//
+// The placement fields record what the panel was positioned *against*, not
+// just where it ended up: a panel that only knows its own position can
+// clamp itself back on-screen but cannot re-place itself, so it drifts as
+// soon as its size changes.
 type Geometry struct {
 	MonW, MonH     int     // monitor size
-	PanelX, PanelY int     // panel position as (re)clamped
+	PanelX, PanelY int     // panel position as placed
 	PPCX, PPCY     float64 // physical pixels per cell
 	Scale          float64 // physical px / logical unit
 	Pad            int     // extra logical units per edge (panel chrome)
+
+	AnchorX, AnchorY int // root: the opening click, before clamping
+	ParentX, ParentY int // submenu: where its parent panel sits
+	ParentW          int // submenu: parent width in cells; 0 means this is a root
+	Row              int // submenu: the parent row it hangs from
 }
+
+// IsSub reports whether g places a submenu against a parent panel rather
+// than a root menu against a click.
+func (g Geometry) IsSub() bool { return g.ParentW > 0 }
 
 type Msg struct {
 	Type       MsgType
