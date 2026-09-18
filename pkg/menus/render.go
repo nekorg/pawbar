@@ -83,12 +83,17 @@ func (r *listRenderer) drawSeparator(row int) {
 
 func (r *listRenderer) itemStyle(it *wire.Item, row int, st *listState) vaxis.Style {
 	var style vaxis.Style
-	if row == st.row {
+	switch {
+	case row == st.row:
 		if st.mousePressed {
 			style.Background = vaxis.ColorBlue
 		} else {
 			style.Background = vaxis.ColorGray
 		}
+	case row == st.openRow:
+		// The row an open submenu hangs from stays lit while the pointer is
+		// over in it, where this panel has no row of its own selected.
+		style.Background = vaxis.ColorGray
 	}
 	if it.Disabled {
 		style.Background = 0
