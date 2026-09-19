@@ -84,7 +84,10 @@ func (m *mprisModule) Init(ctx *module.Ctx) error {
 	// No player yet is fine; NameOwnerChanged adopts the first one.
 	m.reselect(ctx)
 
-	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) { m.handleSignal(ctx, sig) })
+	// Players come and go across a suspend, and the NameOwnerChanged for
+	// them was never delivered; re-pick from whoever is on the bus now.
+	wake := func() { m.reselect(ctx) }
+	module.On(ctx, module.ChanWake(ch, wake), func(sig *dbus.Signal) { m.handleSignal(ctx, sig) })
 
 	ctx.HandleVerb("play-pause", func(module.VerbArgs) error {
 		obj, player, err := m.resolvePlayer()

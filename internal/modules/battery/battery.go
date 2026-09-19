@@ -32,7 +32,15 @@ func (m *batteryModule) Init(ctx *module.Ctx) error {
 	}
 	m.applyStates(ctx)
 
-	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) {
+	// The battery moved while the machine was asleep and UPower's signal
+	// for it was never delivered, so re-read the device on resume.
+	wake := func() {
+		if dev, err := GetDisplayDevice(m.conn); err == nil {
+			m.device = dev
+		}
+		m.applyStates(ctx)
+	}
+	module.On(ctx, module.ChanWake(ch, wake), func(sig *dbus.Signal) {
 		HandleSignal(sig, &m.device)
 		m.applyStates(ctx)
 	})

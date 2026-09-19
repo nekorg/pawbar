@@ -36,6 +36,11 @@ func NewSource[T any](open func(emit func(T)) (Conn, error)) Source[T] {
 	return Source[T]{open: open}
 }
 
+// Open starts the source directly, outside a module. Modules use On; this
+// is for the runtime and for a service package testing the source it
+// exposes, which otherwise needs a whole module runtime to reach it.
+func (s Source[T]) Open(emit func(T)) (Conn, error) { return s.open(emit) }
+
 // ConnFuncs is a convenience Conn built from plain functions; either may
 // be nil.
 type ConnFuncs struct {
@@ -58,7 +63,17 @@ func (c ConnFuncs) Wake() {
 // Chan adapts an existing channel into a Source: the escape hatch for
 // modules wrapping their own event machinery. Delivery ends when ch is
 // closed or the module is stopped.
-func Chan[T any](ch <-chan T) Source[T] {
+//
+// A plain Chan cannot react to resume from suspend: nothing arrives on the
+// channel for what changed while the machine was asleep. Use ChanWake when
+// the module has state to re-read.
+func Chan[T any](ch <-chan T) Source[T] { return ChanWake(ch, nil) }
+
+// ChanWake is Chan with a resume handler. wake runs after the system
+// resumes, which is where a module re-reads the state it holds: a signal
+// that fired while asleep was never delivered, so without this the module
+// shows what was true before the machine went down.
+func ChanWake[T any](ch <-chan T, wake func()) Source[T] {
 	return NewSource(func(emit func(T)) (Conn, error) {
 		done := make(chan struct{})
 		var once sync.Once
@@ -80,7 +95,10 @@ func Chan[T any](ch <-chan T) Source[T] {
 				}
 			}
 		}()
-		return ConnFuncs{StopFn: func() { once.Do(func() { close(done) }) }}, nil
+		return ConnFuncs{
+			StopFn: func() { once.Do(func() { close(done) }) },
+			WakeFn: wake,
+		}, nil
 	})
 }
 

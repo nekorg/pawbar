@@ -1,6 +1,7 @@
 package module
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -151,3 +152,29 @@ func (h *fakeHost) Block() Block                      { return Block{} }
 func (h *fakeHost) Refresh()                          {}
 func (h *fakeHost) Go(fn func())                      { fn() }
 func (h *fakeHost) SubscriptionAdded(s *Subscription) { h.subs = append(h.subs, s) }
+
+func TestChanWakeRunsItsHandlerOnResume(t *testing.T) {
+	ch := make(chan int, 1)
+	var woke atomic.Int32
+
+	conn, err := ChanWake(ch, func() { woke.Add(1) }).Open(func(int) {})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Stop()
+
+	conn.Wake()
+	if got := woke.Load(); got != 1 {
+		t.Errorf("wake handler ran %d times, want 1", got)
+	}
+}
+
+func TestChanWakeToleratesNoHandler(t *testing.T) {
+	ch := make(chan int, 1)
+	conn, err := Chan(ch).Open(func(int) {})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Stop()
+	conn.Wake() // a plain Chan has no wake handler; must not panic
+}

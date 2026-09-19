@@ -40,7 +40,16 @@ func (m *bluetoothModule) Init(ctx *module.Ctx) error {
 	}
 	m.applyStates(ctx)
 
-	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) {
+	// bluez may have dropped or picked up a connection while asleep, and
+	// the PropertiesChanged for it never reached us.
+	wake := func() {
+		if err := m.initState(); err != nil {
+			ctx.Log("resync after resume: %v", err)
+			return
+		}
+		m.applyStates(ctx)
+	}
+	module.On(ctx, module.ChanWake(ch, wake), func(sig *dbus.Signal) {
 		if err := m.handleSignal(sig); err != nil {
 			ctx.Log("%v", err)
 			return

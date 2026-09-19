@@ -48,7 +48,14 @@ func (m *wifiModule) Init(ctx *module.Ctx) error {
 	m.refreshStrength(ctx)
 
 	sigs := nmgr.Subscribe()
-	module.On(ctx, module.Chan(sigs), func(sig *dbus.Signal) {
+	// The link may have come up, gone down or moved network while asleep.
+	wake := func() {
+		if err := m.refreshConnection(); err != nil {
+			ctx.Log("resync after resume: %v", err)
+		}
+		m.refreshStrength(ctx)
+	}
+	module.On(ctx, module.ChanWake(sigs, wake), func(sig *dbus.Signal) {
 		if m.handleSignal(sig) {
 			m.refreshStrength(ctx)
 		}

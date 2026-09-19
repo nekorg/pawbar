@@ -74,7 +74,17 @@ func (m *ppModule) Init(ctx *module.Ctx) error {
 	}
 	m.setProfileState(ctx, profile)
 
-	module.On(ctx, module.Chan(ch), func(sig *dbus.Signal) {
+	// A suspend can land the machine on a different profile than it left
+	// on, and the PropertiesChanged for it never reached us.
+	wake := func() {
+		profile, err := m.getProfile()
+		if err != nil {
+			ctx.Log("resync after resume: %v", err)
+			return
+		}
+		m.setProfileState(ctx, profile)
+	}
+	module.On(ctx, module.ChanWake(ch, wake), func(sig *dbus.Signal) {
 		if len(sig.Body) < 2 {
 			return
 		}
