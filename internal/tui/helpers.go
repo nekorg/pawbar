@@ -84,14 +84,18 @@ func slotRuns(side, idx int, spacer bool) []run {
 	var out []run
 	for _, seg := range slotSegments(side, idx) {
 		hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
-		if seg.Image != nil && seg.Cells > 0 {
-			out = append(out, run{cells: imageCells(seg, hit, spacer)})
-			continue
+		switch c := seg.Content.(type) {
+		case module.Image:
+			if c.Img == nil || c.Cells <= 0 {
+				continue
+			}
+			out = append(out, run{cells: imageCells(c, seg.Style, hit, spacer)})
+		case module.Text:
+			out = append(out, run{
+				cells:  textToCells(c.S, seg.Style, hit, true, spacer),
+				shrink: c.Shrink,
+			})
 		}
-		out = append(out, run{
-			cells:  textToCells(seg.Text, seg.Style, hit, true, spacer),
-			shrink: seg.Shrink,
-		})
 	}
 	if lvl < len(levelCache) {
 		levelCache[lvl] = cachedRuns{runs: out, ok: true}
@@ -159,16 +163,16 @@ func visibleSlots(side int) []int {
 	return out
 }
 
-// imageCells reserves seg.Cells blank columns for an icon segment, tagging
+// imageCells reserves img.Cells blank columns for an icon segment, tagging
 // the first with the image so the renderer draws it spanning those columns.
 // The reserved cells share one Hit so clicks route to the segment's region.
-func imageCells(seg module.Segment, hit Hit, spacer bool) []cell {
-	out := make([]cell, 0, seg.Cells)
-	blank := vaxis.Cell{Character: blankChar, Style: seg.Style}
-	for i := 0; i < seg.Cells; i++ {
+func imageCells(img module.Image, style vaxis.Style, hit Hit, spacer bool) []cell {
+	out := make([]cell, 0, img.Cells)
+	blank := vaxis.Cell{Character: blankChar, Style: style}
+	for i := 0; i < img.Cells; i++ {
 		c := cell{c: blank, hit: hit, hasMod: true, isSpacer: spacer}
 		if i == 0 {
-			c.img = &imgCell{img: seg.Image, key: seg.ImageKey, span: seg.Cells}
+			c.img = &imgCell{img: img.Img, key: img.Key, span: img.Cells}
 		}
 		out = append(out, c)
 	}
@@ -221,11 +225,19 @@ func plainCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []cel
 func SegmentsWidth(segs []module.Segment) int {
 	w := 0
 	for _, seg := range segs {
-		if seg.Image != nil && seg.Cells > 0 {
-			w += seg.Cells
+		var text string
+		switch c := seg.Content.(type) {
+		case module.Image:
+			if c.Img != nil && c.Cells > 0 {
+				w += c.Cells
+			}
+			continue
+		case module.Text:
+			text = c.S
+		default:
 			continue
 		}
-		for _, p := range splitOrWhole(seg.Text) {
+		for _, p := range splitOrWhole(text) {
 			if p.Complex {
 				if r := textrun.Shape(p.Text, false, false); r != nil {
 					w += r.Cells()

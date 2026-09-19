@@ -108,7 +108,7 @@ func drainText(t *testing.T, e *Engine, want string) Update {
 	for {
 		select {
 		case u := <-e.Updates():
-			if len(u.Widest()) > 0 && u.Widest()[0].Text == want {
+			if len(u.Widest()) > 0 && u.Widest()[0].Str() == want {
 				return u
 			}
 		case <-deadline:
@@ -208,7 +208,7 @@ func TestEngineUnknownModuleChips(t *testing.T) {
 	t.Cleanup(e.Stop)
 
 	u := waitUpdate(t, e, 2*time.Second)
-	if len(u.Widest()) == 0 || u.Widest()[0].Text != "⚠nope" {
+	if len(u.Widest()) == 0 || u.Widest()[0].Str() != "⚠nope" {
 		t.Fatalf("expected error chip, got %+v", u.Widest())
 	}
 

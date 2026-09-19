@@ -42,7 +42,7 @@ func setup(t *testing.T, gap string, slots []slot) {
 			SetSnapshot(0, i, [][]module.Segment{nil})
 			continue
 		}
-		SetSnapshot(0, i, [][]module.Segment{{{Text: s.text}}})
+		SetSnapshot(0, i, [][]module.Segment{{{Content: module.Text{S: s.text}}}})
 	}
 }
 

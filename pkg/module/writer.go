@@ -13,29 +13,88 @@ import (
 	"go.rockorager.dev/vaxis"
 )
 
-// Segment is one styled run of text a module rendered. Segments are the
-// module's complete output snapshot; the runtime lays them out, truncates
-// them and maps mouse hits back through Region.
+// Segment is one styled piece a module rendered. Segments are the module's
+// complete output snapshot; the runtime lays them out, truncates them and
+// maps mouse hits back through Region. What a segment actually draws is its
+// Content.
 type Segment struct {
-	Text   string
-	Style  vaxis.Style
-	Region string
-	Shape  vaxis.MouseShape
+	Style   vaxis.Style
+	Region  string
+	Shape   vaxis.MouseShape
+	Content Content
+}
 
-	// Shrink > 0 makes this segment elastic: the layout shortens it (in
-	// proportion to the weight, fairly against the other elastic segments
-	// on the bar) before it truncates anything rigid. See format.Part.
+// Equal reports whether two segments would draw identically. The runtime
+// uses it to skip re-publishing unchanged output.
+func (s Segment) Equal(o Segment) bool {
+	if s.Style != o.Style || s.Region != o.Region || s.Shape != o.Shape {
+		return false
+	}
+	if s.Content == nil || o.Content == nil {
+		return s.Content == nil && o.Content == nil
+	}
+	return s.Content.Equal(o.Content)
+}
+
+// Content is what a segment draws. The set of kinds is closed: the layout
+// engine has to measure, trim, shrink and hit-test every one of them, so a
+// content that only knew how to draw itself could not take part in the
+// layout at all.
+type Content interface {
+	isContent()
+	// Equal reports whether other draws the same thing. Implementations
+	// compare by value, never by pointer identity: snapshot de-duplication
+	// runs on every render and must not depend on a producer handing back
+	// the same allocation.
+	Equal(other Content) bool
+}
+
+// Text is a run of terminal text.
+type Text struct {
+	S string
+	// Shrink > 0 makes the run elastic: the layout shortens it (in
+	// proportion to the weight, fairly against the other elastic runs on
+	// the bar) before it truncates anything rigid. See format.Part.
 	Shrink int
+}
 
-	// Image, when non-nil, makes this an icon segment: the runtime draws it
-	// as a Kitty graphic spanning Cells columns instead of drawing Text.
-	// ImageKey identifies the image for caching across frames — it must be
-	// fully determined by the image's content, and callers must reuse the
-	// same image value for an unchanged key so equal snapshots compare
-	// equal (the runtime skips re-publishing unchanged output).
-	Image    image.Image
-	ImageKey string
-	Cells    int
+func (Text) isContent() {}
+
+func (t Text) Equal(other Content) bool {
+	o, ok := other.(Text)
+	return ok && t == o
+}
+
+// Image is a picture drawn as a Kitty graphic spanning Cells columns.
+type Image struct {
+	Img image.Image
+	// Key identifies the image for caching across frames and stands in for
+	// it when comparing: it must be fully determined by the image's
+	// content.
+	Key   string
+	Cells int
+}
+
+func (Image) isContent() {}
+
+func (i Image) Equal(other Content) bool {
+	o, ok := other.(Image)
+	// Comparing Img would compare interface values, which panics outright
+	// on an uncomparable dynamic type. Key is content-derived by contract,
+	// so it is the honest identity here.
+	return ok && i.Key == o.Key && i.Cells == o.Cells
+}
+
+// Txt is a plain, rigid text segment with no styling of its own.
+func Txt(s string) Segment { return Segment{Content: Text{S: s}} }
+
+// Str is the text this segment draws, empty for any other content. For
+// inspecting rendered output: logs, dumps and tests.
+func (s Segment) Str() string {
+	if t, ok := s.Content.(Text); ok {
+		return t.S
+	}
+	return ""
 }
 
 // Resolved is the outcome of resolving the style cascade for a set of
@@ -134,10 +193,10 @@ func (w *Writer) Raw(s string, opts ...SegOpt) {
 
 // Icon emits an image segment: the runtime draws img as a Kitty graphic
 // spanning cells columns, still routing clicks through Region. key
-// identifies the image for cross-frame caching and must be fully
-// determined by the image's content (re-decoding is the caller's concern;
-// it should hand back the same image value for an unchanged key). No-ops
-// when img is nil or cells <= 0.
+// identifies the image for cross-frame caching and comparison, so it must
+// be fully determined by the image's content — re-decoding between frames
+// is fine, but two different pictures must never share a key. No-ops when
+// img is nil or cells <= 0.
 func (w *Writer) Icon(img image.Image, key string, cells int, opts ...SegOpt) {
 	if img == nil || cells <= 0 {
 		return
@@ -149,12 +208,10 @@ func (w *Writer) Icon(img image.Image, key string, cells int, opts ...SegOpt) {
 		shape = o.cursor.Go()
 	}
 	w.fixed(Segment{
-		Style:    r.Style,
-		Region:   o.region,
-		Shape:    shape,
-		Image:    img,
-		ImageKey: key,
-		Cells:    cells,
+		Style:   r.Style,
+		Region:  o.region,
+		Shape:   shape,
+		Content: Image{Img: img, Key: key, Cells: cells},
 	})
 }
 
@@ -199,11 +256,10 @@ func (w *Writer) segment(text string, shrink int, o segOpts, r Resolved) (Segmen
 		shape = o.cursor.Go()
 	}
 	return Segment{
-		Text:   text,
-		Style:  r.Style,
-		Region: o.region,
-		Shape:  shape,
-		Shrink: shrink,
+		Style:   r.Style,
+		Region:  o.region,
+		Shape:   shape,
+		Content: Text{S: text, Shrink: shrink},
 	}, true
 }
 

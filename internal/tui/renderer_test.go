@@ -32,7 +32,7 @@ func drawBar(t *testing.T, cols int, order []string, left, mid, right string) st
 	SetSpacerSlots([]bool{false}, []bool{false}, []bool{false})
 	SetSlotPriorities([]int{0}, []int{0}, []int{0})
 	for side, text := range []string{left, mid, right} {
-		SetSnapshot(side, 0, [][]module.Segment{{{Text: text}}})
+		SetSnapshot(side, 0, [][]module.Segment{{{Content: module.Text{S: text}}}})
 	}
 	Render(win)
 
@@ -131,12 +131,12 @@ func TestSnapshotInvalidatesCachedCells(t *testing.T) {
 		return strings.TrimRight(b.String(), " ")
 	}
 
-	SetSnapshot(0, 0, [][]module.Segment{{{Text: "before"}}})
+	SetSnapshot(0, 0, [][]module.Segment{{{Content: module.Text{S: "before"}}}})
 	if got := read(); got != "before" {
 		t.Fatalf("first frame = %q, want %q", got, "before")
 	}
 
-	SetSnapshot(0, 0, [][]module.Segment{{{Text: "after"}}})
+	SetSnapshot(0, 0, [][]module.Segment{{{Content: module.Text{S: "after"}}}})
 	if got := read(); got != "after" {
 		t.Fatalf("second frame = %q, want %q; cached cells went stale", got, "after")
 	}
@@ -159,8 +159,8 @@ func TestLevelsAreCachedApart(t *testing.T) {
 	SetSpacerSlots([]bool{false}, nil, nil)
 	SetSlotPriorities([]int{0}, nil, nil)
 	SetSnapshot(0, 0, [][]module.Segment{
-		{{Text: "a-very-long-label"}},
-		{{Text: "short"}},
+		{{Content: module.Text{S: "a-very-long-label"}}},
+		{{Content: module.Text{S: "short"}}},
 	})
 
 	read := func(cols int) string {

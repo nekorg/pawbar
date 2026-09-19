@@ -39,10 +39,10 @@ func setupFit(t *testing.T, w, shrinkMin int, segs []module.Segment) []run {
 // survive untouched while the elastic ones give way.
 func TestFitKeepsRigidPiecesIntact(t *testing.T) {
 	runs := setupFit(t, 20, 3, []module.Segment{
-		{Text: ">"},                       // icon: 1 rigid
-		{Text: "TITLETITLE", Shrink: 1},   // 10 elastic
-		{Text: " * "},                     // 3 rigid
-		{Text: "ARTISTARTIST", Shrink: 1}, // 12 elastic
+		{Content: module.Text{S: ">"}},                       // icon: 1 rigid
+		{Content: module.Text{S: "TITLETITLE", Shrink: 1}},   // 10 elastic
+		{Content: module.Text{S: " * "}},                     // 3 rigid
+		{Content: module.Text{S: "ARTISTARTIST", Shrink: 1}}, // 12 elastic
 	})
 
 	// 26 columns of content into 20: the 22 elastic columns are cut to 16,
@@ -69,8 +69,8 @@ func TestFitMaxMinFairness(t *testing.T) {
 			name:  "longest gives way first",
 			width: 8,
 			segs: []module.Segment{
-				{Text: "AAAAAAAAAA", Shrink: 1},
-				{Text: "BBB", Shrink: 1},
+				{Content: module.Text{S: "AAAAAAAAAA", Shrink: 1}},
+				{Content: module.Text{S: "BBB", Shrink: 1}},
 			},
 			want: "AAAA…BBB",
 		},
@@ -79,8 +79,8 @@ func TestFitMaxMinFairness(t *testing.T) {
 			name:  "equal pieces shrink equally",
 			width: 12,
 			segs: []module.Segment{
-				{Text: "AAAAAAAAAA", Shrink: 1},
-				{Text: "BBBBBBBBBB", Shrink: 1},
+				{Content: module.Text{S: "AAAAAAAAAA", Shrink: 1}},
+				{Content: module.Text{S: "BBBBBBBBBB", Shrink: 1}},
 			},
 			want: "AAAAA…BBBBB…",
 		},
@@ -89,8 +89,8 @@ func TestFitMaxMinFairness(t *testing.T) {
 			name:  "weights split the budget",
 			width: 12,
 			segs: []module.Segment{
-				{Text: "AAAAAAAAAAAAAAAAAAAA", Shrink: 2},
-				{Text: "BBBBBBBBBBBBBBBBBBBB", Shrink: 1},
+				{Content: module.Text{S: "AAAAAAAAAAAAAAAAAAAA", Shrink: 2}},
+				{Content: module.Text{S: "BBBBBBBBBBBBBBBBBBBB", Shrink: 1}},
 			},
 			want: "AAAAAAA…BBB…",
 		},
@@ -98,8 +98,8 @@ func TestFitMaxMinFairness(t *testing.T) {
 			name:  "nothing to do when it already fits",
 			width: 40,
 			segs: []module.Segment{
-				{Text: "AAAAAAAAAA", Shrink: 1},
-				{Text: "BBB"},
+				{Content: module.Text{S: "AAAAAAAAAA", Shrink: 1}},
+				{Content: module.Text{S: "BBB"}},
 			},
 			want: "AAAAAAAAAABBB",
 		},
@@ -109,7 +109,7 @@ func TestFitMaxMinFairness(t *testing.T) {
 			name:  "all rigid is left alone",
 			width: 4,
 			segs: []module.Segment{
-				{Text: "AAAAAAAAAA"},
+				{Content: module.Text{S: "AAAAAAAAAA"}},
 			},
 			want: "AAAAAAAAAA",
 		},
@@ -127,8 +127,8 @@ func TestFitRespectsShrinkMin(t *testing.T) {
 	// 20 columns of elastic text into 6, floored at 3 each: the floor wins
 	// and the row stays wider than the bar for the positional trim.
 	runs := setupFit(t, 6, 3, []module.Segment{
-		{Text: "AAAAAAAAAA", Shrink: 1},
-		{Text: "BBBBBBBBBB", Shrink: 1},
+		{Content: module.Text{S: "AAAAAAAAAA", Shrink: 1}},
+		{Content: module.Text{S: "BBBBBBBBBB", Shrink: 1}},
 	})
 	if got, want := runsText(runs), "AA…BB…"; got != want {
 		t.Errorf("got %q want %q", got, want)
@@ -136,8 +136,8 @@ func TestFitRespectsShrinkMin(t *testing.T) {
 
 	// Even asked for less than the floors add up to, no piece goes below it.
 	runs = setupFit(t, 4, 3, []module.Segment{
-		{Text: "AAAAAAAAAA", Shrink: 1},
-		{Text: "BBBBBBBBBB", Shrink: 1},
+		{Content: module.Text{S: "AAAAAAAAAA", Shrink: 1}},
+		{Content: module.Text{S: "BBBBBBBBBB", Shrink: 1}},
 	})
 	for i, r := range runs {
 		if w := totalWidth(r.cells); w < 3 {
@@ -150,9 +150,9 @@ func TestFitRespectsShrinkMin(t *testing.T) {
 // visibly jitters at a fixed width.
 func TestFitIsStable(t *testing.T) {
 	segs := []module.Segment{
-		{Text: "AAAAAAAAA", Shrink: 1},
-		{Text: "BBBBBBBB", Shrink: 1},
-		{Text: "CCCCCCC", Shrink: 1},
+		{Content: module.Text{S: "AAAAAAAAA", Shrink: 1}},
+		{Content: module.Text{S: "BBBBBBBB", Shrink: 1}},
+		{Content: module.Text{S: "CCCCCCC", Shrink: 1}},
 	}
 	first := runsText(setupFit(t, 15, 3, segs))
 	for range 5 {
@@ -189,7 +189,7 @@ func setupLadder(t *testing.T, w int, prios []int, slots [][][]module.Segment) [
 func segsText(segs []module.Segment) string {
 	s := ""
 	for _, seg := range segs {
-		s += seg.Text
+		s += seg.Str()
 	}
 	return s
 }
@@ -198,7 +198,7 @@ func segsText(segs []module.Segment) string {
 func rungs(texts ...string) [][]module.Segment {
 	out := make([][]module.Segment, len(texts))
 	for i, t := range texts {
-		out[i] = []module.Segment{{Text: t}}
+		out[i] = []module.Segment{{Content: module.Text{S: t}}}
 	}
 	return out
 }
@@ -279,8 +279,8 @@ func TestFitShrinksBeforeSteppingDown(t *testing.T) {
 	SetSpacerSlots([]bool{false}, nil, nil)
 	SetSlotPriorities([]int{0}, nil, nil)
 	SetSnapshot(0, 0, [][]module.Segment{
-		{{Text: ">"}, {Text: "TITLETITLE", Shrink: 1}}, // 11 columns
-		{{Text: ">"}}, // the compact rung
+		{{Content: module.Text{S: ">"}}, {Content: module.Text{S: "TITLETITLE", Shrink: 1}}}, // 11 columns
+		{{Content: module.Text{S: ">"}}}, // the compact rung
 	})
 
 	// 11 into 8: the elastic title alone can close the gap, so the rung
@@ -318,13 +318,13 @@ func setupSides(t *testing.T, w int, order []string, l, m, r []module.Segment) [
 // icon. The room a side really has is what it must be fitted against.
 func TestFitAccountsForCenteredMiddle(t *testing.T) {
 	runs := setupSides(t, 60, []string{"middle", "right", "left"},
-		[]module.Segment{{Text: "WS"}},
-		[]module.Segment{{Text: "CLOCK"}},
+		[]module.Segment{{Content: module.Text{S: "WS"}}},
+		[]module.Segment{{Content: module.Text{S: "CLOCK"}}},
 		[]module.Segment{
-			{Text: ">"},
-			{Text: "TITLETITLETITLE", Shrink: 1},
-			{Text: " * "},
-			{Text: "ARTISTARTIST", Shrink: 1},
+			{Content: module.Text{S: ">"}},
+			{Content: module.Text{S: "TITLETITLETITLE", Shrink: 1}},
+			{Content: module.Text{S: " * "}},
+			{Content: module.Text{S: "ARTISTARTIST", Shrink: 1}},
 		})
 
 	// CLOCK is centered over columns 27..31, leaving the right side 28.
@@ -344,8 +344,8 @@ func TestFitAccountsForCenteredMiddle(t *testing.T) {
 // setting has always promised: the anchor listed first keeps its content,
 // and the ones after it live with what is left.
 func TestFitFollowsTruncatePriority(t *testing.T) {
-	long := []module.Segment{{Text: "AAAAAAAAAAAAAAAAAAAA", Shrink: 1}} // 20
-	short := []module.Segment{{Text: "BBBBBBBBBB", Shrink: 1}}          // 10
+	long := []module.Segment{{Content: module.Text{S: "AAAAAAAAAAAAAAAAAAAA", Shrink: 1}}} // 20
+	short := []module.Segment{{Content: module.Text{S: "BBBBBBBBBB", Shrink: 1}}}          // 10
 
 	// 30 columns of elastic text into 24, no middle to split the bar.
 	runs := setupSides(t, 24, []string{"right", "left", "middle"}, short, nil, long)
@@ -406,12 +406,12 @@ func TestEndToEndElasticFormat(t *testing.T) {
 // instead -- taking the icons the elastic markers exist to protect.
 func TestFitAccountsForASideThatOverranTheMiddle(t *testing.T) {
 	runs := setupSides(t, 60, []string{"left", "middle", "right"},
-		[]module.Segment{{Text: "LEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFT"}}, // 40, rigid
-		[]module.Segment{{Text: "CLOCK"}},
+		[]module.Segment{{Content: module.Text{S: "LEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFT"}}}, // 40, rigid
+		[]module.Segment{{Content: module.Text{S: "CLOCK"}}},
 		[]module.Segment{
-			{Text: ">"},
-			{Text: "TITLETITLETITLETITLETITLE", Shrink: 1},
-			{Text: " * "},
+			{Content: module.Text{S: ">"}},
+			{Content: module.Text{S: "TITLETITLETITLETITLETITLE", Shrink: 1}},
+			{Content: module.Text{S: " * "}},
 		})
 
 	// The left ends at column 40, well past the middle's centred span at

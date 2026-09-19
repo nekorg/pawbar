@@ -21,9 +21,9 @@ func segs(parts ...string) []module.Segment {
 	out := make([]module.Segment, 0, len(parts))
 	for i, p := range parts {
 		out = append(out, module.Segment{
-			Text:   p,
-			Region: fmt.Sprintf("p%d", i),
-			Style:  vaxis.Style{Foreground: vaxis.RGBColor(200, 200, 200)},
+			Region:  fmt.Sprintf("p%d", i),
+			Style:   vaxis.Style{Foreground: vaxis.RGBColor(200, 200, 200)},
+			Content: module.Text{S: p},
 		})
 	}
 	return out

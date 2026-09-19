@@ -33,7 +33,7 @@ func TestComplexTextFallsBackToPlainCells(t *testing.T) {
 			t.Fatalf("cell %d carries a run with no shaper up", i)
 		}
 	}
-	if got, want := totalWidth(cells), SegmentsWidth([]module.Segment{{Text: text}}); got != want {
+	if got, want := totalWidth(cells), SegmentsWidth([]module.Segment{{Content: module.Text{S: text}}}); got != want {
 		t.Errorf("width %d from cells, %d from SegmentsWidth", got, want)
 	}
 }

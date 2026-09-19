@@ -237,7 +237,7 @@ func renderStates(t *testing.T, m *wsModule) map[string]string {
 
 	out := map[string]string{}
 	for _, seg := range w.Segments() {
-		out[seg.Region] = seg.Text
+		out[seg.Region] = seg.Str()
 	}
 	return out
 }

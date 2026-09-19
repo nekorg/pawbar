@@ -265,7 +265,7 @@ func (r *runner) render() {
 
 func (r *runner) publish(segs [][]module.Segment) {
 	r.segsMu.Lock()
-	same := slices.EqualFunc(r.lastSegs, segs, slices.Equal)
+	same := slices.EqualFunc(r.lastSegs, segs, sameSegments)
 	if !same {
 		r.lastSegs = segs
 	}
@@ -275,12 +275,19 @@ func (r *runner) publish(segs [][]module.Segment) {
 	}
 }
 
+// sameSegments reports whether two rendered levels would draw identically.
+// Segment holds an interface now, so slices.Equal is out: comparing two
+// interface values panics outright when the dynamic type is uncomparable.
+func sameSegments(a, b []module.Segment) bool {
+	return slices.EqualFunc(a, b, module.Segment.Equal)
+}
+
 func (r *runner) chipSegments() [][]module.Segment {
 	return [][]module.Segment{{{
-		Text:   "⚠" + r.in().Name,
-		Style:  vaxis.Style{Foreground: vaxis.IndexColor(9)},
-		Region: "error",
-		Shape:  vaxis.MouseShapeHelp,
+		Style:   vaxis.Style{Foreground: vaxis.IndexColor(9)},
+		Region:  "error",
+		Shape:   vaxis.MouseShapeHelp,
+		Content: module.Text{S: "⚠" + r.in().Name},
 	}}}
 }
 
