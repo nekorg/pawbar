@@ -324,8 +324,13 @@ func (r *runner) stop() {
 	select {
 	case <-loopDone:
 	case <-time.After(stopTimeout):
-		r.eng.log.Warn().Str("module", r.in().Name).Msgf("stop: goroutine did not settle in %v", stopTimeout)
-		return
+		// The Stop hook runs anyway. It is where a module hands back its
+		// shared services, and skipping it leaks the refcount for the life
+		// of the process: a wedged tray would hold the sni service, and
+		// its dbus names, forever. The hook is already isolated in its own
+		// goroutine behind a recover and a deadline, and a goroutine that
+		// would not settle has broken the serial contract regardless.
+		r.eng.log.Warn().Str("module", r.in().Name).Msgf("stop: goroutine did not settle in %v, releasing anyway", stopTimeout)
 	}
 
 	if st, ok := r.mod.(module.Stopper); ok {
