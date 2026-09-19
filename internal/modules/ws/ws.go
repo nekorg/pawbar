@@ -12,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/nekorg/pawbar/internal/monitor"
-	"github.com/nekorg/pawbar/internal/services"
 	"github.com/nekorg/pawbar/internal/services/hypr"
 	"github.com/nekorg/pawbar/internal/services/i3"
 	"github.com/nekorg/pawbar/pkg/module"
@@ -111,26 +110,14 @@ func (m *wsModule) source() module.Source[[]Workspace] {
 func (m *wsModule) selectBackend() error {
 	switch {
 	case os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "":
-		svc, release, err := services.Acquire("hypr", func() (*hypr.Service, error) {
-			s := &hypr.Service{}
-			if err := s.Start(); err != nil {
-				return nil, err
-			}
-			return s, nil
-		})
+		svc, release, err := hypr.Acquire()
 		if err != nil {
 			return fmt.Errorf("hypr service: %w", err)
 		}
 		m.b, m.bname, m.release = newHyprBackend(svc), "hypr", release
 
 	case os.Getenv("I3SOCK") != "" || os.Getenv("SWAYSOCK") != "":
-		svc, release, err := services.Acquire("i3", func() (*i3.Service, error) {
-			s := &i3.Service{}
-			if err := s.Start(); err != nil {
-				return nil, err
-			}
-			return s, nil
-		})
+		svc, release, err := i3.Acquire()
 		if err != nil {
 			return fmt.Errorf("i3 service: %w", err)
 		}

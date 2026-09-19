@@ -124,8 +124,6 @@ type I3WEvent struct {
 	Container Container `json:"container"`
 }
 
-func (i *Service) Name() string { return "i3" }
-
 func (i *Service) Start() error {
 	if i.running {
 		return nil

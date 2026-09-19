@@ -42,8 +42,6 @@ type Service struct {
 	stop      chan struct{}
 }
 
-func (h *Service) Name() string { return "hypr" }
-
 func (h *Service) Start() error {
 	if h.running {
 		return nil

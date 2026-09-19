@@ -106,8 +106,6 @@ type PulseService struct {
 	listeners []chan State
 }
 
-func (p *PulseService) Name() string { return "pulse" }
-
 // State returns the last known snapshot. Never blocks, never talks to
 // the server.
 func (p *PulseService) State() State {
