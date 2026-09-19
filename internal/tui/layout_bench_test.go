@@ -34,7 +34,7 @@ func segs(parts ...string) []module.Segment {
 // right, each with a detail ladder to step down.
 func benchBar(cols int) *Layout {
 	ellipsis := true
-	lay := New(nil, cols, config.BarSettings{
+	lay := New(nil, nil, cols, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		EnableEllipsis:   &ellipsis,
 		Ellipsis:         "…",

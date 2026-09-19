@@ -43,7 +43,11 @@ type Options struct {
 	Notify func()
 }
 
-var (
+// Shaper rasterises the complex scripts one surface draws. It is per
+// surface, not per process: everything it measures comes off the terminal's
+// cell, so two surfaces at different sizes would each throw the other's
+// shaper away on every cell-size change.
+type Shaper struct {
 	mu   sync.RWMutex
 	opts Options
 	// cellW, cellH is the panel's cell in pixels, as vaxis measured it.
@@ -53,76 +57,80 @@ var (
 	// that was already running when that happened knows not to install
 	// itself. loadOnce starts the next one, and is replaced with it.
 	gen      int
-	loadOnce = &sync.Once{}
+	loadOnce *sync.Once
 	loaded   bool
-	state    *shaper
-)
+	state    *fontset
+}
 
-// Init records how the bar was started. It does no work: the shaper only
+// New records how the bar was started. It does no work: the shaper only
 // comes up if a complex run actually turns up, and the font index alone
-// costs more than every module in the bar put together. Safe to call again
-// on a config reload, which rebuilds the shaper if anything it depends on
-// moved.
-func Init(o Options) {
-	mu.Lock()
-	defer mu.Unlock()
-	changed := o.KittyCmd != opts.KittyCmd || o.KittyConfig != opts.KittyConfig ||
-		o.FontSize != opts.FontSize || o.Family != opts.Family ||
-		o.BaselineNudge != opts.BaselineNudge
-	opts = o
+// costs more than every module in the bar put together.
+func New(o Options) *Shaper {
+	return &Shaper{opts: o, loadOnce: &sync.Once{}}
+}
+
+// Configure applies new options, rebuilding the shaper if anything it
+// depends on moved. Called again on a config reload.
+func (sh *Shaper) Configure(o Options) {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	changed := o.KittyCmd != sh.opts.KittyCmd || o.KittyConfig != sh.opts.KittyConfig ||
+		o.FontSize != sh.opts.FontSize || o.Family != sh.opts.Family ||
+		o.BaselineNudge != sh.opts.BaselineNudge
+	sh.opts = o
 	if changed {
-		invalidate()
+		sh.invalidate()
 	}
 }
 
 // SetCellSize records the panel's cell in pixels. Everything the shaper
 // measures comes off the cell, so a change throws it away and rebuilds it.
-func SetCellSize(w, h int) {
-	mu.Lock()
-	defer mu.Unlock()
-	if w == cellW && h == cellH {
+func (sh *Shaper) SetCellSize(w, h int) {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if w == sh.cellW && h == sh.cellH {
 		return
 	}
-	cellW, cellH = w, h
+	sh.cellW, sh.cellH = w, h
 	logging.Log.Debug().Msgf("textrun: cell is now %dx%d", w, h)
-	invalidate()
+	sh.invalidate()
 }
 
 // invalidate throws the shaper away so the next complex run builds a fresh
-// one. Callers hold mu.
-func invalidate() {
-	gen++
-	loaded = false
-	state = nil
-	loadOnce = &sync.Once{}
+// one. Callers hold sh.mu.
+func (sh *Shaper) invalidate() {
+	sh.gen++
+	sh.loaded = false
+	sh.state = nil
+	sh.loadOnce = &sync.Once{}
 }
 
 // ready reports whether the shaper can be used, starting it the first time it
 // is asked. Until it is up, callers fall back to plain terminal cells; the
 // Notify hook repaints once that stops being necessary.
-func ready() (*shaper, bool) {
-	mu.RLock()
-	if loaded {
-		s := state
-		mu.RUnlock()
+func (sh *Shaper) ready() (*fontset, bool) {
+	sh.mu.RLock()
+	if sh.loaded {
+		s := sh.state
+		sh.mu.RUnlock()
 		return s, s != nil
 	}
-	o, w, h, g, once := opts, cellW, cellH, gen, loadOnce
-	mu.RUnlock()
+	o, w, h, g, once := sh.opts, sh.cellW, sh.cellH, sh.gen, sh.loadOnce
+	sh.mu.RUnlock()
 
 	if w <= 0 || h <= 0 {
 		return nil, false
 	}
 	once.Do(func() {
 		go func() {
-			s := newShaper(o, w, h)
-			mu.Lock()
+			s := newFontset(o, w, h)
+			sh.mu.Lock()
 			// Something already threw this build away while it ran.
-			stale := gen != g
+			stale := sh.gen != g
 			if !stale {
-				state, loaded = s, true
+				sh.state, sh.loaded = s, true
 			}
-			mu.Unlock()
+			sh.mu.Unlock()
 			if !stale && s != nil && o.Notify != nil {
 				o.Notify()
 			}
@@ -131,9 +139,13 @@ func ready() (*shaper, bool) {
 	return nil, false
 }
 
-// CellSize reports the pixel cell the shaper lays out for.
-func CellSize() (int, int) {
-	mu.RLock()
-	defer mu.RUnlock()
-	return cellW, cellH
+// CellSize reports the pixel cell the shaper lays out for. A nil Shaper has
+// no cell of its own.
+func (sh *Shaper) CellSize() (int, int) {
+	if sh == nil {
+		return 0, 0
+	}
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	return sh.cellW, sh.cellH
 }

@@ -65,13 +65,40 @@ func TestComplex(t *testing.T) {
 // Nothing may be shaped before the shaper is up, and asking must not block
 // the caller: the bar draws plain cells for that frame instead.
 func TestShapeBeforeReady(t *testing.T) {
-	if r := Shape("हिन्दी", false, false); r != nil {
+	sh := New(Options{})
+	if r := sh.Shape("हिन्दी", false, false); r != nil {
 		t.Fatalf("Shape returned %v with no cell size set", r)
+	}
+	// And a bar that never built one at all just draws plain cells.
+	if r := (*Shaper)(nil).Shape("हिन्दी", false, false); r != nil {
+		t.Fatalf("a nil Shaper shaped %v", r)
 	}
 	if n := (*Run)(nil).Cells(); n != 0 {
 		t.Errorf("(*Run)(nil).Cells() = %d, want 0", n)
 	}
 	if img, key := (*Run)(nil).Image(4, false, false, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}); img != nil || key != "" {
 		t.Errorf("(*Run)(nil).Image() = %v, %q", img, key)
+	}
+}
+
+// Two surfaces at different DPI each keep their own cell. As one global this
+// was a fight: every SetCellSize threw the other surface's shaper away and
+// rebuilt it against the wrong cell.
+func TestShapersDoNotShareACellSize(t *testing.T) {
+	a, b := New(Options{}), New(Options{})
+	a.SetCellSize(10, 20)
+	b.SetCellSize(14, 28)
+
+	if w, h := a.CellSize(); w != 10 || h != 20 {
+		t.Errorf("a.CellSize() = %dx%d, want 10x20", w, h)
+	}
+	if w, h := b.CellSize(); w != 14 || h != 28 {
+		t.Errorf("b.CellSize() = %dx%d, want 14x28", w, h)
+	}
+
+	// Moving one must leave the other alone.
+	a.SetCellSize(12, 24)
+	if w, h := b.CellSize(); w != 14 || h != 28 {
+		t.Errorf("b.CellSize() = %dx%d after a resized, want 14x28", w, h)
 	}
 }

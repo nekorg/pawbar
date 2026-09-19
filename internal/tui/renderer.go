@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/nekorg/pawbar/internal/config"
+	"github.com/nekorg/pawbar/internal/textrun"
 	"github.com/nekorg/pawbar/pkg/module"
 	"go.rockorager.dev/vaxis"
 )
@@ -87,6 +88,9 @@ type Layout struct {
 	// if the terminal happens to segment the same way. nil in tests, which
 	// fall back to uucode.
 	term *vaxis.Vaxis
+	// shaper rasterises the scripts a cell grid cannot hold. nil in tests,
+	// and in any bar that never meets one.
+	shaper *textrun.Shaper
 
 	width int
 	// [side][slot][level] -> segments, levels widest first.
@@ -123,10 +127,12 @@ type Layout struct {
 }
 
 // New builds a layout for one surface. vx measures grapheme widths and owns
-// every graphic this layout draws.
-func New(vx *vaxis.Vaxis, w int, settings config.BarSettings, gapStyle vaxis.Style) *Layout {
+// every graphic this layout draws; sh rasterises complex scripts for it and
+// may be nil.
+func New(vx *vaxis.Vaxis, sh *textrun.Shaper, w int, settings config.BarSettings, gapStyle vaxis.Style) *Layout {
 	lay := &Layout{
 		term:         vx,
+		shaper:       sh,
 		icons:        map[imgKey]*vaxis.KittyImage{},
 		seen:         map[imgKey]bool{},
 		colorCache:   map[vaxis.Color]color.NRGBA{},

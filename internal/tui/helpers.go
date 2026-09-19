@@ -194,7 +194,7 @@ func (lay *Layout) textToCells(s string, style vaxis.Style, hit Hit, hasMod, spa
 		// The shaper comes up in the background, so until it does this
 		// falls through to the terminal and repaints when it is ready.
 		if p.Complex {
-			if r := textrun.Shape(p.Text, bold, italic); r != nil {
+			if r := lay.shaper.Shape(p.Text, bold, italic); r != nil {
 				out = append(out, runCells(r, style, hit, hasMod, spacer)...)
 				continue
 			}
@@ -239,7 +239,7 @@ func (lay *Layout) SegmentsWidth(segs []module.Segment) int {
 		}
 		for _, p := range splitOrWhole(text) {
 			if p.Complex {
-				if r := textrun.Shape(p.Text, false, false); r != nil {
+				if r := lay.shaper.Shape(p.Text, false, false); r != nil {
 					w += r.Cells()
 					continue
 				}

@@ -27,7 +27,7 @@ import (
 // every outline into one pass would be faster and wrong: Devanagari marks
 // overlap their bases, and a counter in one glyph would cancel ink in
 // another.
-func (s *shaper) mask(line shaping.Line, cells int) *image.Alpha {
+func (s *fontset) mask(line shaping.Line, cells int) *image.Alpha {
 	m := image.NewAlpha(image.Rect(0, 0, cells*s.cellW, s.cellH))
 	var z vector.Rasterizer
 	x := float32(0)

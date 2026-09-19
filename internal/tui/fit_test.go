@@ -21,7 +21,7 @@ import (
 // arithmetic in the expectations is exact.
 func setupFit(t *testing.T, w, shrinkMin int, segs []module.Segment) []run {
 	t.Helper()
-	lay := New(nil, w, config.BarSettings{
+	lay := New(nil, nil, w, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        shrinkMin,
@@ -171,7 +171,7 @@ func TestFitIsStable(t *testing.T) {
 // own detail levels and priority, and returns the laid-out text per side.
 func setupLadder(t *testing.T, w int, prios []int, slots [][][]module.Segment) []string {
 	t.Helper()
-	lay := New(nil, w, config.BarSettings{
+	lay := New(nil, nil, w, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,
@@ -279,7 +279,7 @@ func TestFitLadderRecoversOnWidening(t *testing.T) {
 // shortens its text before it drops structure.
 func TestFitShrinksBeforeSteppingDown(t *testing.T) {
 	t.Parallel()
-	lay := New(nil, 8, config.BarSettings{
+	lay := New(nil, nil, 8, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,
@@ -306,7 +306,7 @@ func TestFitShrinksBeforeSteppingDown(t *testing.T) {
 // segments, and order is the bar.truncate_priority to place them in.
 func setupSides(t *testing.T, w int, order []string, l, m, r []module.Segment) [3][]run {
 	t.Helper()
-	lay := New(nil, w, config.BarSettings{
+	lay := New(nil, nil, w, config.BarSettings{
 		TruncatePriority: order,
 		Ellipsis:         "…",
 		ShrinkMin:        3,
@@ -395,7 +395,7 @@ func TestEndToEndElasticFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lay := New(nil, 21, config.BarSettings{
+	lay := New(nil, nil, 21, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,

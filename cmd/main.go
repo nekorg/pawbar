@@ -258,10 +258,11 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	win := vx.Window()
 	win.Clear()
 
+	var shaper *textrun.Shaper
 	{
 		size := vx.Size()
 		menus.SetCellMetrics(size.Cols, size.Rows, size.XPixel, size.YPixel)
-		textrun.Init(textrun.Options{
+		shaper = textrun.New(textrun.Options{
 			KittyCmd:      bar.Settings.Kitty.Command,
 			KittyConfig:   bar.Settings.Kitty.ConfigFile(),
 			FontSize:      menus.PanelFontSize,
@@ -273,14 +274,14 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			// the layout is safe.
 			Notify: func() { vx.PostEvent(vaxis.Redraw{}) },
 		})
-		setTextCell(size)
+		setTextCell(shaper, size)
 	}
 
 	engine := core.New(bar, log)
 
 	w, h := win.Size()
 	log.Debug().Msgf("panel size (cells): %d, %d", w, h)
-	lay := tui.New(vx, w, bar.Settings, bar.GapStyle)
+	lay := tui.New(vx, shaper, w, bar.Settings, bar.GapStyle)
 	lay.SetSlotCounts(engine.SlotCounts())
 	lay.SetSpacerSlots(engine.SpacerSlots())
 	lay.SetSlotPriorities(engine.SlotPriorities())
@@ -340,7 +341,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			// stay at whatever init measured.
 			vx.Resize(ev)
 			menus.SetCellMetrics(ev.Cols, ev.Rows, ev.XPixel, ev.YPixel)
-			setTextCell(vx.Size())
+			setTextCell(shaper, vx.Size())
 			// A resize is how a mode or scale change on this output
 			// reaches the bar; the cached geometry is now stale.
 			monitor.Invalidate()
@@ -467,7 +468,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			}
 			log.Info().Msg("config: reloading")
 			bar = newBar
-			textrun.Init(textrun.Options{
+			shaper.Configure(textrun.Options{
 				KittyCmd:      bar.Settings.Kitty.Command,
 				KittyConfig:   bar.Settings.Kitty.ConfigFile(),
 				FontSize:      menus.PanelFontSize,
@@ -497,11 +498,11 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 // setTextCell hands the shaper the panel's cell in pixels. Everything it
 // draws is measured off the cell, so this is what keeps a rasterised run the
 // same size as the text beside it.
-func setTextCell(size vaxis.Resize) {
+func setTextCell(sh *textrun.Shaper, size vaxis.Resize) {
 	if size.Cols <= 0 || size.Rows <= 0 {
 		return
 	}
-	textrun.SetCellSize(size.XPixel/size.Cols, size.YPixel/size.Rows)
+	sh.SetCellSize(size.XPixel/size.Cols, size.YPixel/size.Rows)
 }
 
 func updateMouseShape(vx *vaxis.Vaxis, target vaxis.MouseShape, old *vaxis.MouseShape) {

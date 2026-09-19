@@ -56,10 +56,10 @@ var scriptFamilies = []struct {
 	{unicode.Thaana, []string{"Noto Sans Thaana"}},
 }
 
-// shaper owns the font index and the metrics every run is laid out against.
+// fontset owns the font index and the metrics every run is laid out against.
 // Everything on it is read-only once built except the caches, which have
 // their own lock.
-type shaper struct {
+type fontset struct {
 	fm      *fontscan.FontMap
 	met     metrics
 	cellW   int
@@ -82,7 +82,7 @@ type runKey struct {
 
 // newShaper builds the font index and measures the cell. It runs off the
 // render path, and returns nil if there is no usable font at all.
-func newShaper(o Options, cw, ch int) *shaper {
+func newFontset(o Options, cw, ch int) *fontset {
 	// fontscan logs to stderr by default, which in a panel is the bar's log
 	// stream; send it where the rest of our noise goes.
 	fm := fontscan.NewFontMap(stdlog.New(debugWriter{}, "", 0))
@@ -95,7 +95,7 @@ func newShaper(o Options, cw, ch int) *shaper {
 		return nil
 	}
 
-	s := &shaper{fm: fm, cellW: cw, cellH: ch, ellipse: "…",
+	s := &fontset{fm: fm, cellW: cw, cellH: ch, ellipse: "…",
 		runs: map[runKey]*Run{}, images: map[string]*cached{}}
 
 	if m, err := probe(o, ch); err == nil {
@@ -130,7 +130,7 @@ func newShaper(o Options, cw, ch int) *shaper {
 // whatever makes the face's own ascent plus descent fill the cell, and every
 // face then shares the baseline that puts. Verified against kitty's numbers
 // for the bar's own font.
-func (s *shaper) deriveMetrics() {
+func (s *fontset) deriveMetrics() {
 	face := s.faceFor('M', nil)
 	if face == nil {
 		s.met.em = float64(s.cellH) * 0.8
@@ -153,7 +153,7 @@ func (s *shaper) deriveMetrics() {
 // families is the query for a run: the terminal's own face first so shared
 // characters do not change typeface, then whatever the user or we named for
 // the script it is written in.
-func (s *shaper) families(text string) []string {
+func (s *fontset) families(text string) []string {
 	out := []string{termFamily}
 	if s.met.family != "" {
 		out = append(out, s.met.family)
@@ -182,7 +182,7 @@ func (s *shaper) families(text string) []string {
 	return out
 }
 
-func (s *shaper) faceFor(r rune, families []string) *font.Face {
+func (s *fontset) faceFor(r rune, families []string) *font.Face {
 	if families == nil {
 		families = []string{termFamily, fontscan.Monospace}
 	}
@@ -193,7 +193,7 @@ func (s *shaper) faceFor(r rune, families []string) *font.Face {
 // Run is one shaped complex phrase, measured in cells and cuttable at the
 // cluster boundaries the shaper itself reordered around.
 type Run struct {
-	s      *shaper
+	s      *fontset
 	text   string
 	runes  []rune
 	aspect font.Aspect
@@ -215,9 +215,13 @@ type Run struct {
 
 // Shape measures text, which must be a complex part from [Split]. It returns
 // nil while the shaper is still coming up, so the caller falls back to plain
-// terminal cells for that frame and repaints when Notify fires.
-func Shape(text string, bold, italic bool) *Run {
-	s, ok := ready()
+// terminal cells for that frame and repaints when Notify fires. A nil Shaper
+// never shapes, which is what a bar with no shaper of its own does.
+func (sh *Shaper) Shape(text string, bold, italic bool) *Run {
+	if sh == nil {
+		return nil
+	}
+	s, ok := sh.ready()
 	if !ok {
 		return nil
 	}
@@ -247,7 +251,7 @@ func (r *Run) Cells() int {
 
 // measure shapes the whole phrase once and reads the cluster boundaries and
 // per-cluster advances back off the glyphs. Callers hold s.mu.
-func (s *shaper) measure(text string, aspect font.Aspect) *Run {
+func (s *fontset) measure(text string, aspect font.Aspect) *Run {
 	r := &Run{s: s, text: text, runes: []rune(text), aspect: aspect}
 	r.fams = s.families(text)
 
@@ -285,7 +289,7 @@ func (s *shaper) measure(text string, aspect font.Aspect) *Run {
 
 // shapeLine shapes runes into visually ordered runs, one per script, face and
 // bidi level. Callers hold s.mu.
-func (s *shaper) shapeLine(runes []rune, families []string, aspect font.Aspect) shaping.Line {
+func (s *fontset) shapeLine(runes []rune, families []string, aspect font.Aspect) shaping.Line {
 	if len(runes) == 0 {
 		return nil
 	}

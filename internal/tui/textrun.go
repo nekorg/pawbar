@@ -77,7 +77,7 @@ func (lay *Layout) ellipsisFor(from cell) []cell {
 // terminal's own em and baseline, so it lands on integer pixels with nothing
 // to resample and nothing to centre.
 func (lay *Layout) drawTextRun(win vaxis.Window, col int, group []cell) {
-	cellW, cellH := textrun.CellSize()
+	cellW, cellH := lay.shaper.CellSize()
 	if cellW <= 0 || cellH <= 0 || col < 0 {
 		return
 	}

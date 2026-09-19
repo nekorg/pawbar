@@ -25,7 +25,7 @@ func setup(t *testing.T, gap string, slots []slot) *Layout {
 		Ellipsis:         "…",
 		Gap:              gap,
 	}
-	lay := New(nil, 200, settings, vaxis.Style{})
+	lay := New(nil, nil, 200, settings, vaxis.Style{})
 	lay.SetSlotCounts(len(slots), 0, 0)
 
 	spacerFlags := make([]bool, len(slots))

@@ -22,7 +22,7 @@ func drawBar(t *testing.T, cols int, order []string, left, mid, right string) st
 	win := vaxis.NewOffscreenWindow(cols, 1)
 
 	ellipsis := true
-	lay := New(win.Vx, cols, config.BarSettings{
+	lay := New(win.Vx, nil, cols, config.BarSettings{
 		TruncatePriority: order,
 		EnableEllipsis:   &ellipsis,
 		Ellipsis:         "…",
@@ -111,7 +111,7 @@ func TestSnapshotInvalidatesCachedCells(t *testing.T) {
 	win := vaxis.NewOffscreenWindow(cols, 1)
 
 	ellipsis := true
-	lay := New(win.Vx, cols, config.BarSettings{
+	lay := New(win.Vx, nil, cols, config.BarSettings{
 		TruncatePriority: []string{"left", "middle", "right"},
 		EnableEllipsis:   &ellipsis,
 		Ellipsis:         "…",
@@ -153,7 +153,7 @@ func TestLevelsAreCachedApart(t *testing.T) {
 	win := vaxis.NewOffscreenWindow(wide, 1)
 
 	ellipsis := true
-	lay := New(win.Vx, wide, config.BarSettings{
+	lay := New(win.Vx, nil, wide, config.BarSettings{
 		TruncatePriority: []string{"left", "middle", "right"},
 		EnableEllipsis:   &ellipsis,
 		Ellipsis:         "…",
@@ -198,7 +198,7 @@ func TestLevelsAreCachedApart(t *testing.T) {
 // no font and no compositor in the way.
 func TestLayoutFillsTheRowWithoutAWindow(t *testing.T) {
 	t.Parallel()
-	lay := New(nil, 20, config.BarSettings{
+	lay := New(nil, nil, 20, config.BarSettings{
 		TruncatePriority: []string{"left", "middle", "right"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,

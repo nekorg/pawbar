@@ -19,7 +19,7 @@ import (
 // what the terminal makes of the text.
 func TestComplexTextFallsBackToPlainCells(t *testing.T) {
 	t.Parallel()
-	lay := New(nil, 200, config.BarSettings{
+	lay := New(nil, nil, 200, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 	}, vaxis.Style{})
@@ -43,7 +43,7 @@ func TestComplexTextFallsBackToPlainCells(t *testing.T) {
 // still gets the ellipsis the terminal draws.
 func TestEllipsisStaysPlainWithoutARun(t *testing.T) {
 	t.Parallel()
-	lay := New(nil, 200, config.BarSettings{
+	lay := New(nil, nil, 200, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 	}, vaxis.Style{})
