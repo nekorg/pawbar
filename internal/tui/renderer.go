@@ -116,6 +116,12 @@ type Layout struct {
 	// Encoding is async and Draw must place the same image every frame, so
 	// images are created once and reused; seen tracks which survived the
 	// current frame so vanished ones can be freed.
+	// occ marks the columns a side has claimed. The fitting pass reads it
+	// to place the sides after, and paint reads it to skip the columns
+	// nothing drew into: the window was cleared, so blanks are already
+	// there and writing them again is the most expensive nothing there is.
+	occ []bool
+
 	icons map[imgKey]*vaxis.KittyImage
 	seen  map[imgKey]bool
 
@@ -169,6 +175,7 @@ func (lay *Layout) Configure(w int, settings config.BarSettings, gapStyle vaxis.
 	lay.shrinkMin = settings.ShrinkMin
 	// kitty can report mouse events at the very edge, one past width.
 	lay.state = make([]cell, lay.width+1)
+	lay.occ = make([]bool, lay.width)
 	lay.Invalidate()
 }
 
@@ -254,6 +261,7 @@ func (lay *Layout) slotSegments(side, idx int) []module.Segment {
 func (lay *Layout) Resize(w int) {
 	lay.width = w
 	lay.state = make([]cell, lay.width+1)
+	lay.occ = make([]bool, lay.width)
 	lay.Invalidate()
 }
 
@@ -296,7 +304,8 @@ func (lay *Layout) layout() {
 	}
 
 	blocks := lay.buildBlocks()
-	occ := make([]bool, lay.width)
+	clear(lay.occ)
+	occ := lay.occ
 
 	mark := func(x, w int) {
 		for i := 0; i < w && x+i < lay.width; i++ {
@@ -418,21 +427,25 @@ func (lay *Layout) paint(win vaxis.Window) {
 	}
 
 	n := min(lay.width, len(lay.state))
+	runs := false
 	for col := range n {
-		win.SetCell(col, 0, lay.state[col].c)
-	}
-
-	// An icon covers its reserved span, and only when the whole span
-	// survived: a partially trimmed icon is dropped rather than clipped.
-	for col := range n {
-		if ic := lay.state[col].img; ic != nil && col+ic.span <= lay.width {
-			lay.drawIcon(win, col, ic, cp)
+		if !lay.occ[col] {
+			continue
 		}
+		c := lay.state[col]
+		win.SetCell(col, 0, c.c)
+		// An icon covers its reserved span, and only when the whole span
+		// survived: a partially trimmed icon is dropped, not clipped.
+		if c.img != nil && col+c.img.span <= lay.width {
+			lay.drawIcon(win, col, c.img, cp)
+		}
+		runs = runs || c.txt != nil
 	}
 
 	// A rasterised run is one image over all of its columns that are still
-	// here, so gather each run's columns before drawing any of them.
-	for col := 0; col < n; {
+	// here, so gather each run's columns before drawing any of them. Most
+	// bars never hold one, so this only sweeps when the pass above saw one.
+	for col := 0; runs && col < n; {
 		c := lay.state[col]
 		if c.txt == nil {
 			col++
