@@ -15,7 +15,7 @@ import (
 
 func TestApplyChangesReplacesAndClearsIconPixmap(t *testing.T) {
 	events := make(chan Event, 2)
-	s := &Service{listeners: []chan<- Event{events}}
+	s := &Service{listeners: []chan Event{events}}
 	it := &Item{
 		BusName:    ":1.42",
 		Path:       "/StatusNotifierItem",
@@ -56,5 +56,51 @@ func TestApplyChangesReplacesAndClearsIconPixmap(t *testing.T) {
 	ev = <-events
 	if ev.Item.IconPixmap != nil {
 		t.Fatalf("event IconPixmap = %T, want nil", ev.Item.IconPixmap)
+	}
+}
+
+func TestRemoveListenerDetachesTheChannel(t *testing.T) {
+	s := &Service{}
+	keep := s.IssueListener()
+	drop := s.IssueListener()
+
+	s.RemoveListener(drop)
+	s.emit(Event{Kind: ItemAdded, ID: "a"})
+
+	select {
+	case <-keep:
+	default:
+		t.Error("the attached listener got nothing")
+	}
+	select {
+	case ev := <-drop:
+		t.Errorf("a detached listener still received %v", ev.Kind)
+	default:
+	}
+}
+
+// A hot reload stops a module's subscription and starts a new one. Without
+// RemoveListener the old channel stays registered, fills up, and every
+// later event logs a drop against it forever.
+func TestSubscriptionStopDetachesItsListener(t *testing.T) {
+	s := &Service{}
+
+	conn, err := s.Events().Open(func(Event) {})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	s.mu.RLock()
+	n := len(s.listeners)
+	s.mu.RUnlock()
+	if n != 1 {
+		t.Fatalf("listeners after open = %d, want 1", n)
+	}
+
+	conn.Stop()
+	s.mu.RLock()
+	n = len(s.listeners)
+	s.mu.RUnlock()
+	if n != 0 {
+		t.Errorf("listeners after stop = %d, want 0 (the reload leak)", n)
 	}
 }

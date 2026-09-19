@@ -12,7 +12,6 @@ import (
 	"image/color"
 	"strconv"
 
-	"github.com/nekorg/pawbar/internal/services"
 	"github.com/nekorg/pawbar/internal/services/sni"
 	"github.com/nekorg/pawbar/pkg/dbusmenukitty"
 	"github.com/nekorg/pawbar/pkg/menus"
@@ -46,13 +45,7 @@ type trayModule struct {
 }
 
 func (m *trayModule) Init(ctx *module.Ctx) error {
-	svc, release, err := services.Acquire("sni", func() (*sni.Service, error) {
-		s := &sni.Service{}
-		if err := s.Start(); err != nil {
-			return nil, err
-		}
-		return s, nil
-	})
+	svc, release, err := sni.Acquire()
 	if err != nil {
 		return err
 	}
@@ -61,7 +54,7 @@ func (m *trayModule) Init(ctx *module.Ctx) error {
 	m.icons = make(map[string]image.Image)
 
 	m.items = svc.Items()
-	module.On(ctx, module.Chan(svc.IssueListener()), func(sni.Event) {
+	module.On(ctx, svc.Events(), func(sni.Event) {
 		m.items = m.svc.Items()
 	})
 	return nil

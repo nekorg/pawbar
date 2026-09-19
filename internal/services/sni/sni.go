@@ -97,7 +97,7 @@ type Service struct {
 
 	mu        sync.RWMutex
 	items     map[string]*Item
-	listeners []chan<- Event
+	listeners []chan Event
 
 	running bool
 	stop    chan struct{}
@@ -206,14 +206,41 @@ func (sb *signalBroadcaster) Close() {
 	sb.mu.Unlock()
 }
 
-func (s *Service) Name() string { return "sni" }
-
 func (s *Service) IssueListener() <-chan Event {
 	ch := make(chan Event, 16)
 	s.mu.Lock()
 	s.listeners = append(s.listeners, ch)
 	s.mu.Unlock()
 	return ch
+}
+
+// RemoveListener detaches a channel previously issued by IssueListener so
+// the service stops broadcasting to it. Without it a hot reload leaves the
+// old module's channel registered forever: nothing drains it, it fills, and
+// every later event logs a dropped-event warning against it.
+func (s *Service) RemoveListener(l <-chan Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, ch := range s.listeners {
+		if (<-chan Event)(ch) == l {
+			s.listeners = append(s.listeners[:i], s.listeners[i+1:]...)
+			return
+		}
+	}
+}
+
+// Resync re-enumerates the watcher's registered items. Items can come and
+// go while the machine is asleep, and a resumed host hears nothing about
+// what it missed. trackItem skips what is already tracked, so this only
+// adds what turned up.
+func (s *Service) Resync() {
+	s.mu.RLock()
+	ready := s.running && s.watcher != nil
+	s.mu.RUnlock()
+	if !ready {
+		return
+	}
+	s.bootstrapItems()
 }
 
 func (s *Service) Start() error {
@@ -1354,7 +1381,7 @@ func (s *Service) emit(ev Event) {
 	}
 
 	s.mu.RLock()
-	listeners := make([]chan<- Event, len(s.listeners))
+	listeners := make([]chan Event, len(s.listeners))
 	copy(listeners, s.listeners)
 	s.mu.RUnlock()
 
