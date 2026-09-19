@@ -255,9 +255,10 @@ func (lay *Layout) SegmentsWidth(segs []module.Segment) int {
 	return w
 }
 
-// writeCell writes one cell (padding wide graphemes) and mirrors it into
-// the hit table. Returns x + grapheme width.
-func (lay *Layout) writeCell(win vaxis.Window, x int, c cell) int {
+// placeCell puts one cell in the bar row at x, padding a wide grapheme
+// across the columns it covers so the hit table answers for all of them.
+// Returns x + grapheme width.
+func (lay *Layout) placeCell(x int, c cell) int {
 	if c.c.Width == 0 {
 		// Layout budgeted no column for this, but vaxis spends one on any
 		// cell it holds. Drop it instead of letting it push the row over.
@@ -266,12 +267,10 @@ func (lay *Layout) writeCell(win vaxis.Window, x int, c cell) int {
 	if x+c.c.Width > lay.width {
 		return x + c.c.Width
 	}
-	win.SetCell(x, 0, c.c)
 	lay.state[x] = c
 
 	for w := 1; w < c.c.Width; w++ {
 		empty := vaxis.Cell{Style: c.c.Style}
-		win.SetCell(x+w, 0, empty)
 		lay.state[x+w] = cell{c: empty, hit: c.hit, hasMod: c.hasMod, isSpacer: c.isSpacer}
 	}
 	return x + c.c.Width

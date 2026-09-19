@@ -192,3 +192,42 @@ func TestLevelsAreCachedApart(t *testing.T) {
 		t.Fatalf("widened back = %q, want the wide level again", got)
 	}
 }
+
+// The point of splitting layout from paint: what the bar decided to show is
+// settled before any window exists, so it can be read back with no terminal,
+// no font and no compositor in the way.
+func TestLayoutFillsTheRowWithoutAWindow(t *testing.T) {
+	t.Parallel()
+	lay := New(nil, 20, config.BarSettings{
+		TruncatePriority: []string{"left", "middle", "right"},
+		Ellipsis:         "…",
+		ShrinkMin:        3,
+	}, vaxis.Style{})
+	lay.SetSlotCounts(1, 0, 1)
+	lay.SetSpacerSlots([]bool{false}, nil, []bool{false})
+	lay.SetSlotPriorities([]int{0}, nil, []int{0})
+	lay.SetSnapshot(0, 0, [][]module.Segment{{module.Txt("cpu")}})
+	lay.SetSnapshot(2, 0, [][]module.Segment{{module.Txt("12:00")}})
+
+	lay.layout()
+
+	row := ""
+	for col := range 20 {
+		row += lay.state[col].c.Grapheme
+	}
+	if want := "cpu            12:00"; row != want {
+		t.Errorf("row = %q, want %q", row, want)
+	}
+
+	// And the hit table came with it: the left slot answers for its own
+	// columns, the right slot for its own, the gap between for neither.
+	if hit, ok := lay.HitAt(0, true); !ok || hit.Side != 0 || hit.Index != 0 {
+		t.Errorf("column 0: got %+v ok=%v, want left slot 0", hit, ok)
+	}
+	if hit, ok := lay.HitAt(19, false); !ok || hit.Side != 2 || hit.Index != 0 {
+		t.Errorf("column 19: got %+v ok=%v, want right slot 0", hit, ok)
+	}
+	if _, ok := lay.HitAt(8, true); ok {
+		t.Error("empty column claimed a module")
+	}
+}

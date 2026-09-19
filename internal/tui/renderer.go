@@ -276,15 +276,17 @@ func (lay *Layout) HitAt(col int, leftHalf bool) (Hit, bool) {
 
 // Render lays all snapshots out and writes them to the window.
 func (lay *Layout) Render(win vaxis.Window) {
+	lay.layout()
+	lay.paint(win)
+}
+
+// layout places every side into state, the bar row as it will be drawn: one
+// entry per column, carrying the cell and the hit metadata behind it. It
+// touches no window, so what the bar decided to show can be inspected, and
+// tested, without a terminal to show it on.
+func (lay *Layout) layout() {
 	for i := range lay.state {
 		lay.state[i] = cell{c: vaxis.Cell{Character: blankChar}}
-	}
-	win.Clear()
-	clear(lay.seen)
-
-	var cp cellPx
-	if size := win.Vx.Size(); size.Cols > 0 && size.Rows > 0 {
-		cp = cellPx{w: size.XPixel / size.Cols, h: size.YPixel / size.Rows}
 	}
 
 	blocks := lay.buildBlocks()
@@ -312,7 +314,7 @@ func (lay *Layout) Render(win vaxis.Window) {
 			if fullW > free {
 				visible = lay.trimStart(block.cells, free, lay.useEllipsis)
 			}
-			lay.drawCells(win, visible, 0, cp, mark)
+			lay.place(visible, 0, mark)
 
 		case middle:
 			start := (lay.width - fullW) / 2
@@ -331,7 +333,7 @@ func (lay *Layout) Render(win vaxis.Window) {
 				}
 			}
 			if firstOcc == -1 {
-				lay.drawCells(win, block.cells, start, cp, mark)
+				lay.place(block.cells, start, mark)
 				break
 			}
 
@@ -356,7 +358,7 @@ func (lay *Layout) Render(win vaxis.Window) {
 				if lay.useEllipsis {
 					visible = lay.withEllipsisBefore(visible)
 				}
-				lay.drawCells(win, visible, end-totalWidth(visible), cp, mark)
+				lay.place(visible, end-totalWidth(visible), mark)
 
 			case lastOcc == end-1 || firstOcc > start:
 				space := firstOcc - start - ellW
@@ -367,7 +369,7 @@ func (lay *Layout) Render(win vaxis.Window) {
 				if lay.useEllipsis {
 					visible = lay.withEllipsisAfter(visible)
 				}
-				lay.drawCells(win, visible, start, cp, mark)
+				lay.place(visible, start, mark)
 			}
 
 		case right:
@@ -382,45 +384,63 @@ func (lay *Layout) Render(win vaxis.Window) {
 			if len(visible) == 0 {
 				break
 			}
-			lay.drawCells(win, visible, lay.width-totalWidth(visible), cp, mark)
+			lay.place(visible, lay.width-totalWidth(visible), mark)
 		}
+	}
+}
+
+// place writes a run of cells into the bar row from column x, reporting the
+// columns it filled through mark so the sides placed after it know what is
+// taken. Drawing happens later, off the row it leaves behind.
+func (lay *Layout) place(cells []cell, x int, mark func(int, int)) {
+	for _, c := range cells {
+		next := lay.placeCell(x, c)
+		mark(x, next-x)
+		x = next
+	}
+}
+
+// paint draws the laid-out row: the cells, then the graphics that sit over
+// them. Nothing here decides anything; every position was settled by layout.
+func (lay *Layout) paint(win vaxis.Window) {
+	win.Clear()
+	clear(lay.seen)
+
+	var cp cellPx
+	if size := win.Vx.Size(); size.Cols > 0 && size.Rows > 0 {
+		cp = cellPx{w: size.XPixel / size.Cols, h: size.YPixel / size.Rows}
+	}
+
+	n := min(lay.width, len(lay.state))
+	for col := range n {
+		win.SetCell(col, 0, lay.state[col].c)
+	}
+
+	// An icon covers its reserved span, and only when the whole span
+	// survived: a partially trimmed icon is dropped rather than clipped.
+	for col := range n {
+		if ic := lay.state[col].img; ic != nil && col+ic.span <= lay.width {
+			lay.drawIcon(win, col, ic, cp)
+		}
+	}
+
+	// A rasterised run is one image over all of its columns that are still
+	// here, so gather each run's columns before drawing any of them.
+	for col := 0; col < n; {
+		c := lay.state[col]
+		if c.txt == nil {
+			col++
+			continue
+		}
+		end := col + 1
+		for end < n && lay.state[end].txt != nil && lay.state[end].txt.run == c.txt.run {
+			end++
+		}
+		lay.drawTextRun(win, col, lay.state[col:end])
+		col = end
 	}
 
 	lay.pruneIcons()
-}
-
-func (lay *Layout) drawCells(win vaxis.Window, cells []cell, x int, cp cellPx, mark func(int, int)) {
-	for i := 0; i < len(cells); {
-		r := cells[i]
-		// A complex run is drawn as one image over all the columns of it
-		// that survived, so gather them before writing any.
-		if r.txt != nil {
-			j := i + 1
-			for j < len(cells) && cells[j].txt != nil && cells[j].txt.run == r.txt.run {
-				j++
-			}
-			start := x
-			for _, c := range cells[i:j] {
-				next := lay.writeCell(win, x, c)
-				mark(x, next-x)
-				x = next
-			}
-			lay.drawTextRun(win, start, cells[i:j])
-			i = j
-			continue
-		}
-
-		start := x
-		next := lay.writeCell(win, x, r)
-		mark(x, next-x)
-		// Draw the icon over its reserved span only when it fits whole;
-		// a partially trimmed icon is dropped rather than clipped.
-		if r.img != nil && start+r.img.span <= lay.width {
-			lay.drawIcon(win, start, r.img, cp)
-		}
-		x = next
-		i++
-	}
 }
 
 // drawIcon places an icon segment's Kitty graphic over span columns from
