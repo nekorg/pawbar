@@ -11,6 +11,8 @@ package tui
 
 import (
 	"image"
+	"image/color"
+	"sync"
 
 	"github.com/nekorg/pawbar/internal/config"
 	"github.com/nekorg/pawbar/pkg/module"
@@ -67,29 +69,26 @@ type imgKey struct {
 // lock, so Render asks once and hands it down.
 type cellPx struct{ w, h int }
 
-// iconCache holds encoded Kitty graphics keyed by ImageKey. Encoding is
-// async and Draw must place the same image every frame, so images are
-// created once and reused; iconSeen tracks which survived the current frame
-// so vanished ones can be freed.
-var (
-	iconCache = map[imgKey]*vaxis.KittyImage{}
-	iconSeen  = map[imgKey]bool{}
-)
-
 // blankChar is a space. vaxis.Characters would spin up a grapheme iterator
 // to tell us the same thing, once per column per frame.
 var blankChar = vaxis.Character{Grapheme: " ", Width: 1}
 
-// term is the terminal we lay out for. Grapheme widths have to be measured the
-// way it will render them; uucode's numbers are only right if the terminal
-// happens to segment the same way. nil in tests, which fall back to uucode.
-var term *vaxis.Vaxis
+// Layout is one bar surface: its geometry, its slots' snapshots, the cells
+// they last laid out to, and the terminal resources that drew them.
+//
+// None of this can be shared between surfaces. The obvious half is geometry
+// and snapshots. The less obvious half is icons: a *vaxis.KittyImage belongs
+// to the vaxis that made it, and pruneIcons destroys every graphic the last
+// frame did not draw, so two surfaces sharing the cache would place each
+// other's image ids and free each other's graphics.
+type Layout struct {
+	// term is the terminal we lay out for. Grapheme widths have to be
+	// measured the way it will render them; uucode's numbers are only right
+	// if the terminal happens to segment the same way. nil in tests, which
+	// fall back to uucode.
+	term *vaxis.Vaxis
 
-// Bind sets the terminal used to measure grapheme widths. Call before Init.
-func Bind(vx *vaxis.Vaxis) { term = vx }
-
-var (
-	width, height int
+	width int
 	// [side][slot][level] -> segments, levels widest first.
 	snapshots  [3][][][]module.Segment
 	spacers    [3][]bool // [side][slot] -> spacer module?
@@ -108,7 +107,34 @@ var (
 	ellipsisWidth int
 	gapCells      []cell
 	shrinkMin     int
-)
+
+	// icons holds encoded Kitty graphics keyed by content and cell size.
+	// Encoding is async and Draw must place the same image every frame, so
+	// images are created once and reused; seen tracks which survived the
+	// current frame so vanished ones can be freed.
+	icons map[imgKey]*vaxis.KittyImage
+	seen  map[imgKey]bool
+
+	// The rgb the terminal reports for indexed and default colours, which a
+	// rasterised run needs and a cell does not.
+	colorMu      sync.Mutex
+	colorCache   map[vaxis.Color]color.NRGBA
+	colorPending map[vaxis.Color]bool
+}
+
+// New builds a layout for one surface. vx measures grapheme widths and owns
+// every graphic this layout draws.
+func New(vx *vaxis.Vaxis, w int, settings config.BarSettings, gapStyle vaxis.Style) *Layout {
+	lay := &Layout{
+		term:         vx,
+		icons:        map[imgKey]*vaxis.KittyImage{},
+		seen:         map[imgKey]bool{},
+		colorCache:   map[vaxis.Color]color.NRGBA{},
+		colorPending: map[vaxis.Color]bool{},
+	}
+	lay.Configure(w, settings, gapStyle)
+	return lay
+}
 
 type anchor int
 
@@ -123,122 +149,123 @@ type block struct {
 	side  anchor
 }
 
-// Init prepares the layout state. Can be called again (reload).
-func Init(w, h int, settings config.BarSettings, gapStyle vaxis.Style) {
-	width, height = w, h
-	truncOrder = settings.TruncatePriority
-	useEllipsis = settings.EnableEllipsis == nil || *settings.EnableEllipsis
-	ellipsisCells = textToCells(settings.Ellipsis, vaxis.Style{}, Hit{}, false, false)
-	ellipsisWidth = totalWidth(ellipsisCells)
+// Configure applies bar settings and geometry. Called again on reload.
+func (lay *Layout) Configure(w int, settings config.BarSettings, gapStyle vaxis.Style) {
+	lay.width = w
+	lay.truncOrder = settings.TruncatePriority
+	lay.useEllipsis = settings.EnableEllipsis == nil || *settings.EnableEllipsis
+	lay.ellipsisCells = lay.textToCells(settings.Ellipsis, vaxis.Style{}, Hit{}, false, false)
+	lay.ellipsisWidth = totalWidth(lay.ellipsisCells)
 	// Gap cells claim no module of their own: hasMod is false so they
 	// never absorb a click, and isSpacer lets HitAt donate them to the
 	// neighbour the pointer is leaning toward.
-	gapCells = textToCells(settings.Gap, gapStyle, Hit{}, false, true)
-	shrinkMin = settings.ShrinkMin
+	lay.gapCells = lay.textToCells(settings.Gap, gapStyle, Hit{}, false, true)
+	lay.shrinkMin = settings.ShrinkMin
 	// kitty can report mouse events at the very edge, one past width.
-	state = make([]cell, width+1)
-	Invalidate()
+	lay.state = make([]cell, lay.width+1)
+	lay.Invalidate()
 }
 
 // SetSlotCounts sizes the snapshot store: one slot per module instance.
-func SetSlotCounts(l, m, r int) {
+func (lay *Layout) SetSlotCounts(l, m, r int) {
 	for side, n := range [3]int{l, m, r} {
-		snapshots[side] = make([][][]module.Segment, n)
-		levels[side] = make([]int, n)
-		slotCache[side] = make([][]cachedRuns, n)
+		lay.snapshots[side] = make([][][]module.Segment, n)
+		lay.levels[side] = make([]int, n)
+		lay.slotCache[side] = make([][]cachedRuns, n)
 	}
 }
 
 // SetSlotPriorities records each slot's degrade order: when the bar runs
 // out of room, the lowest priority steps down its format ladder first.
 // Indexing matches SetSlotCounts.
-func SetSlotPriorities(l, m, r []int) {
-	priorities[0] = l
-	priorities[1] = m
-	priorities[2] = r
+func (lay *Layout) SetSlotPriorities(l, m, r []int) {
+	lay.priorities[0] = l
+	lay.priorities[1] = m
+	lay.priorities[2] = r
 }
 
 // SetSpacerSlots records which slots are spacer modules, so their edge
 // cells can donate click area to adjacent modules. Indexing matches
 // SetSlotCounts.
-func SetSpacerSlots(l, m, r []bool) {
-	spacers[0] = l
-	spacers[1] = m
-	spacers[2] = r
+func (lay *Layout) SetSpacerSlots(l, m, r []bool) {
+	lay.spacers[0] = l
+	lay.spacers[1] = m
+	lay.spacers[2] = r
 	// isSpacer is baked into every cached cell.
-	Invalidate()
+	lay.Invalidate()
 }
 
 // SetSnapshot stores a slot's latest render output: one segment run per
 // detail level, widest first.
-func SetSnapshot(side, idx int, slotLevels [][]module.Segment) {
-	if side < 0 || side > 2 || idx < 0 || idx >= len(snapshots[side]) {
+func (lay *Layout) SetSnapshot(side, idx int, slotLevels [][]module.Segment) {
+	if side < 0 || side > 2 || idx < 0 || idx >= len(lay.snapshots[side]) {
 		return
 	}
-	snapshots[side][idx] = slotLevels
-	slotCache[side][idx] = nil
+	lay.snapshots[side][idx] = slotLevels
+	lay.slotCache[side][idx] = nil
 }
 
 // slotLevel is the detail level a slot actually draws at: what fit chose,
 // clamped to the ladder it has.
-func slotLevel(side, idx int) int {
-	if n := len(snapshots[side][idx]); n > 0 {
-		return min(levels[side][idx], n-1)
+func (lay *Layout) slotLevel(side, idx int) int {
+	if n := len(lay.snapshots[side][idx]); n > 0 {
+		return min(lay.levels[side][idx], n-1)
 	}
 	return 0
 }
 
 // slotLevels is a slot's per-level run cache, grown to its ladder on first
 // use. A slot whose snapshot changed has a nil one and starts over.
-func slotLevels(side, idx int) []cachedRuns {
-	n := max(len(snapshots[side][idx]), 1)
-	if len(slotCache[side][idx]) != n {
-		slotCache[side][idx] = make([]cachedRuns, n)
+func (lay *Layout) slotLevels(side, idx int) []cachedRuns {
+	n := max(len(lay.snapshots[side][idx]), 1)
+	if len(lay.slotCache[side][idx]) != n {
+		lay.slotCache[side][idx] = make([]cachedRuns, n)
 	}
-	return slotCache[side][idx]
+	return lay.slotCache[side][idx]
 }
 
 // Invalidate drops every slot's laid-out cells. Anything that changes how a
 // segment rasterises rather than what it says has to call this: the cache is
 // keyed on the snapshot, and none of that is in the snapshot.
-func Invalidate() {
-	for side := range slotCache {
-		clear(slotCache[side])
+func (lay *Layout) Invalidate() {
+	for side := range lay.slotCache {
+		clear(lay.slotCache[side])
 	}
 }
 
 // slotSegments returns the segments a slot draws at its currently chosen
 // detail level.
-func slotSegments(side, idx int) []module.Segment {
-	slot := snapshots[side][idx]
+func (lay *Layout) slotSegments(side, idx int) []module.Segment {
+	slot := lay.snapshots[side][idx]
 	if len(slot) == 0 {
 		return nil
 	}
-	return slot[min(levels[side][idx], len(slot)-1)]
+	return slot[min(lay.levels[side][idx], len(slot)-1)]
 }
 
-// Resize adjusts to a new window size.
-func Resize(w, h int) {
-	width, height = w, h
-	state = make([]cell, width+1)
-	Invalidate()
+// Resize adjusts to a new bar width. The bar is one row, so its height
+// never took part in the layout.
+func (lay *Layout) Resize(w int) {
+	lay.width = w
+	lay.state = make([]cell, lay.width+1)
+	lay.Invalidate()
 }
 
 // HitAt maps a bar column to the slot beneath it. leftHalf tells which half
 // of the cell the pointer is on: a spacer cell donates its module-facing
 // half to an adjacent non-spacer module, widening that module's hitbox.
-func HitAt(col int, leftHalf bool) (Hit, bool) {
-	if col < 0 || col >= len(state) {
+func (lay *Layout) HitAt(col int, leftHalf bool) (Hit, bool) {
+	if col < 0 || col >= len(lay.state) {
 		return Hit{}, false
 	}
-	c := state[col]
+	c := lay.state[col]
 	if c.isSpacer {
 		nbr := col + 1
 		if leftHalf {
 			nbr = col - 1
 		}
-		if nbr >= 0 && nbr < len(state) {
-			n := state[nbr]
+		if nbr >= 0 && nbr < len(lay.state) {
+			n := lay.state[nbr]
 			if n.hasMod && !n.isSpacer {
 				return n.hit, true
 			}
@@ -248,23 +275,23 @@ func HitAt(col int, leftHalf bool) (Hit, bool) {
 }
 
 // Render lays all snapshots out and writes them to the window.
-func Render(win vaxis.Window) {
-	for i := range state {
-		state[i] = cell{c: vaxis.Cell{Character: blankChar}}
+func (lay *Layout) Render(win vaxis.Window) {
+	for i := range lay.state {
+		lay.state[i] = cell{c: vaxis.Cell{Character: blankChar}}
 	}
 	win.Clear()
-	clear(iconSeen)
+	clear(lay.seen)
 
 	var cp cellPx
 	if size := win.Vx.Size(); size.Cols > 0 && size.Rows > 0 {
 		cp = cellPx{w: size.XPixel / size.Cols, h: size.YPixel / size.Rows}
 	}
 
-	blocks := buildBlocks()
-	occ := make([]bool, width)
+	blocks := lay.buildBlocks()
+	occ := make([]bool, lay.width)
 
 	mark := func(x, w int) {
-		for i := 0; i < w && x+i < width; i++ {
+		for i := 0; i < w && x+i < lay.width; i++ {
 			occ[x+i] = true
 		}
 	}
@@ -278,24 +305,24 @@ func Render(win vaxis.Window) {
 		switch block.side {
 		case left:
 			free := 0
-			for free < width && !occ[free] {
+			for free < lay.width && !occ[free] {
 				free++
 			}
 			visible := block.cells
 			if fullW > free {
-				visible = trimStart(block.cells, free, useEllipsis)
+				visible = lay.trimStart(block.cells, free, lay.useEllipsis)
 			}
-			drawCells(win, visible, 0, cp, mark)
+			lay.drawCells(win, visible, 0, cp, mark)
 
 		case middle:
-			start := (width - fullW) / 2
+			start := (lay.width - fullW) / 2
 			if start < 0 {
 				start = 0
 			}
 			end := start + fullW
 
 			firstOcc, lastOcc := -1, -1
-			for i := start; i < end && i < width; i++ {
+			for i := start; i < end && i < lay.width; i++ {
 				if occ[i] {
 					if firstOcc == -1 {
 						firstOcc = i
@@ -304,13 +331,13 @@ func Render(win vaxis.Window) {
 				}
 			}
 			if firstOcc == -1 {
-				drawCells(win, block.cells, start, cp, mark)
+				lay.drawCells(win, block.cells, start, cp, mark)
 				break
 			}
 
 			ellW := 0
-			if useEllipsis {
-				ellW = ellipsisWidth
+			if lay.useEllipsis {
+				ellW = lay.ellipsisWidth
 			}
 			switch {
 			case firstOcc == start && lastOcc == end-1:
@@ -325,44 +352,44 @@ func Render(win vaxis.Window) {
 				if space <= 0 {
 					break
 				}
-				visible := trimEnd(block.cells, space, false)
-				if useEllipsis {
-					visible = withEllipsisBefore(visible)
+				visible := lay.trimEnd(block.cells, space, false)
+				if lay.useEllipsis {
+					visible = lay.withEllipsisBefore(visible)
 				}
-				drawCells(win, visible, end-totalWidth(visible), cp, mark)
+				lay.drawCells(win, visible, end-totalWidth(visible), cp, mark)
 
 			case lastOcc == end-1 || firstOcc > start:
 				space := firstOcc - start - ellW
 				if space <= 0 {
 					break
 				}
-				visible := trimStart(block.cells, space, false)
-				if useEllipsis {
-					visible = withEllipsisAfter(visible)
+				visible := lay.trimStart(block.cells, space, false)
+				if lay.useEllipsis {
+					visible = lay.withEllipsisAfter(visible)
 				}
-				drawCells(win, visible, start, cp, mark)
+				lay.drawCells(win, visible, start, cp, mark)
 			}
 
 		case right:
 			free := 0
-			for i := width - 1; i >= 0 && !occ[i]; i-- {
+			for i := lay.width - 1; i >= 0 && !occ[i]; i-- {
 				free++
 			}
 			visible := block.cells
 			if fullW > free {
-				visible = trimEnd(block.cells, free, useEllipsis)
+				visible = lay.trimEnd(block.cells, free, lay.useEllipsis)
 			}
 			if len(visible) == 0 {
 				break
 			}
-			drawCells(win, visible, width-totalWidth(visible), cp, mark)
+			lay.drawCells(win, visible, lay.width-totalWidth(visible), cp, mark)
 		}
 	}
 
-	pruneIcons()
+	lay.pruneIcons()
 }
 
-func drawCells(win vaxis.Window, cells []cell, x int, cp cellPx, mark func(int, int)) {
+func (lay *Layout) drawCells(win vaxis.Window, cells []cell, x int, cp cellPx, mark func(int, int)) {
 	for i := 0; i < len(cells); {
 		r := cells[i]
 		// A complex run is drawn as one image over all the columns of it
@@ -374,22 +401,22 @@ func drawCells(win vaxis.Window, cells []cell, x int, cp cellPx, mark func(int, 
 			}
 			start := x
 			for _, c := range cells[i:j] {
-				next := writeCell(win, x, c)
+				next := lay.writeCell(win, x, c)
 				mark(x, next-x)
 				x = next
 			}
-			drawTextRun(win, start, cells[i:j])
+			lay.drawTextRun(win, start, cells[i:j])
 			i = j
 			continue
 		}
 
 		start := x
-		next := writeCell(win, x, r)
+		next := lay.writeCell(win, x, r)
 		mark(x, next-x)
 		// Draw the icon over its reserved span only when it fits whole;
 		// a partially trimmed icon is dropped rather than clipped.
-		if r.img != nil && start+r.img.span <= width {
-			drawIcon(win, start, r.img, cp)
+		if r.img != nil && start+r.img.span <= lay.width {
+			lay.drawIcon(win, start, r.img, cp)
 		}
 		x = next
 		i++
@@ -400,16 +427,16 @@ func drawCells(win vaxis.Window, cells []cell, x int, cp cellPx, mark func(int, 
 // col, scaled to one row and centered pixel-precisely (mirrors the menu
 // gutter-icon renderer). Images are cached by key + cell size across
 // frames.
-func drawIcon(win vaxis.Window, col int, ic *imgCell, cp cellPx) {
+func (lay *Layout) drawIcon(win vaxis.Window, col int, ic *imgCell, cp cellPx) {
 	cellW, cellH := cp.w, cp.h
 
 	cacheKey := imgKey{key: ic.key, w: cellW, h: cellH}
-	iconSeen[cacheKey] = true
+	lay.seen[cacheKey] = true
 
-	kimg, cached := iconCache[cacheKey]
+	kimg, cached := lay.icons[cacheKey]
 	if !cached {
 		kimg = win.Vx.NewKittyGraphic(ic.img)
-		iconCache[cacheKey] = kimg
+		lay.icons[cacheKey] = kimg
 		if cellW > 0 && cellH > 0 {
 			// vaxis resamples with a high-quality filter, so this yields a
 			// crisp icon fitted to the gutter box.
@@ -437,11 +464,11 @@ func drawIcon(win vaxis.Window, col int, ic *imgCell, cp cellPx) {
 
 // pruneIcons frees Kitty graphics whose segments were not drawn this frame
 // (e.g. a tray item disappeared), so terminal image memory doesn't grow.
-func pruneIcons() {
-	for key, kimg := range iconCache {
-		if !iconSeen[key] {
+func (lay *Layout) pruneIcons() {
+	for key, kimg := range lay.icons {
+		if !lay.seen[key] {
 			kimg.Destroy()
-			delete(iconCache, key)
+			delete(lay.icons, key)
 		}
 	}
 }

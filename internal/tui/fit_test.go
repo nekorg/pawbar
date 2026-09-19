@@ -21,23 +21,24 @@ import (
 // arithmetic in the expectations is exact.
 func setupFit(t *testing.T, w, shrinkMin int, segs []module.Segment) []run {
 	t.Helper()
-	Init(w, 1, config.BarSettings{
+	lay := New(nil, w, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        shrinkMin,
 	}, vaxis.Style{})
-	SetSlotCounts(0, 0, 1)
-	SetSpacerSlots(nil, nil, []bool{false})
-	SetSlotPriorities(nil, nil, []int{0})
-	SetSnapshot(2, 0, [][]module.Segment{segs})
+	lay.SetSlotCounts(0, 0, 1)
+	lay.SetSpacerSlots(nil, nil, []bool{false})
+	lay.SetSlotPriorities(nil, nil, []int{0})
+	lay.SetSnapshot(2, 0, [][]module.Segment{segs})
 
-	return fit()[2]
+	return lay.fit()[2]
 }
 
 // The reported bug: a right-anchored mpris used to lose its play/pause icon
 // first, because the block was trimmed from its head. Rigid pieces must now
 // survive untouched while the elastic ones give way.
 func TestFitKeepsRigidPiecesIntact(t *testing.T) {
+	t.Parallel()
 	runs := setupFit(t, 20, 3, []module.Segment{
 		{Content: module.Text{S: ">"}},                       // icon: 1 rigid
 		{Content: module.Text{S: "TITLETITLE", Shrink: 1}},   // 10 elastic
@@ -57,6 +58,7 @@ func TestFitKeepsRigidPiecesIntact(t *testing.T) {
 }
 
 func TestFitMaxMinFairness(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		width int
@@ -116,6 +118,7 @@ func TestFitMaxMinFairness(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			if got := runsText(setupFit(t, c.width, 3, c.segs)); got != c.want {
 				t.Errorf("got %q want %q", got, c.want)
 			}
@@ -124,6 +127,7 @@ func TestFitMaxMinFairness(t *testing.T) {
 }
 
 func TestFitRespectsShrinkMin(t *testing.T) {
+	t.Parallel()
 	// 20 columns of elastic text into 6, floored at 3 each: the floor wins
 	// and the row stays wider than the bar for the positional trim.
 	runs := setupFit(t, 6, 3, []module.Segment{
@@ -149,6 +153,7 @@ func TestFitRespectsShrinkMin(t *testing.T) {
 // Two equally fair answers must not alternate between frames, or the bar
 // visibly jitters at a fixed width.
 func TestFitIsStable(t *testing.T) {
+	t.Parallel()
 	segs := []module.Segment{
 		{Content: module.Text{S: "AAAAAAAAA", Shrink: 1}},
 		{Content: module.Text{S: "BBBBBBBB", Shrink: 1}},
@@ -166,22 +171,22 @@ func TestFitIsStable(t *testing.T) {
 // own detail levels and priority, and returns the laid-out text per side.
 func setupLadder(t *testing.T, w int, prios []int, slots [][][]module.Segment) []string {
 	t.Helper()
-	Init(w, 1, config.BarSettings{
+	lay := New(nil, w, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,
 	}, vaxis.Style{})
-	SetSlotCounts(len(slots), 0, 0)
-	SetSpacerSlots(make([]bool, len(slots)), nil, nil)
-	SetSlotPriorities(prios, nil, nil)
+	lay.SetSlotCounts(len(slots), 0, 0)
+	lay.SetSpacerSlots(make([]bool, len(slots)), nil, nil)
+	lay.SetSlotPriorities(prios, nil, nil)
 	for i, s := range slots {
-		SetSnapshot(0, i, s)
+		lay.SetSnapshot(0, i, s)
 	}
 
-	fit()
+	lay.fit()
 	out := make([]string, len(slots))
 	for i := range slots {
-		out[i] = segsText(slotSegments(0, i))
+		out[i] = segsText(lay.slotSegments(0, i))
 	}
 	return out
 }
@@ -204,6 +209,7 @@ func rungs(texts ...string) [][]module.Segment {
 }
 
 func TestFitStepsDownLadder(t *testing.T) {
+	t.Parallel()
 	// Two modules, each able to drop from 8 columns to 3.
 	slots := [][][]module.Segment{
 		rungs("AAAAAAAA", "AAA"),
@@ -246,6 +252,7 @@ func TestFitStepsDownLadder(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			got := setupLadder(t, c.width, c.prios, slots)
 			if !slices.Equal(got, c.want) {
 				t.Errorf("got %v want %v", got, c.want)
@@ -257,6 +264,7 @@ func TestFitStepsDownLadder(t *testing.T) {
 // Levels are recomputed each frame, so a bar that widens back out must
 // recover the detail it gave up.
 func TestFitLadderRecoversOnWidening(t *testing.T) {
+	t.Parallel()
 	slots := [][][]module.Segment{rungs("AAAAAAAA", "AAA")}
 
 	if got := setupLadder(t, 4, []int{0}, slots); got[0] != "AAA" {
@@ -270,26 +278,27 @@ func TestFitLadderRecoversOnWidening(t *testing.T) {
 // Shrinking comes first: a module with both elastic text and a ladder
 // shortens its text before it drops structure.
 func TestFitShrinksBeforeSteppingDown(t *testing.T) {
-	Init(8, 1, config.BarSettings{
+	t.Parallel()
+	lay := New(nil, 8, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,
 	}, vaxis.Style{})
-	SetSlotCounts(1, 0, 0)
-	SetSpacerSlots([]bool{false}, nil, nil)
-	SetSlotPriorities([]int{0}, nil, nil)
-	SetSnapshot(0, 0, [][]module.Segment{
+	lay.SetSlotCounts(1, 0, 0)
+	lay.SetSpacerSlots([]bool{false}, nil, nil)
+	lay.SetSlotPriorities([]int{0}, nil, nil)
+	lay.SetSnapshot(0, 0, [][]module.Segment{
 		{{Content: module.Text{S: ">"}}, {Content: module.Text{S: "TITLETITLE", Shrink: 1}}}, // 11 columns
 		{{Content: module.Text{S: ">"}}}, // the compact rung
 	})
 
 	// 11 into 8: the elastic title alone can close the gap, so the rung
 	// with no title at all must not be reached.
-	if got, want := runsText(fit()[0]), ">TITLET…"; got != want {
+	if got, want := runsText(lay.fit()[0]), ">TITLET…"; got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
-	if levels[0][0] != 0 {
-		t.Errorf("stepped down to level %d when shrinking was enough", levels[0][0])
+	if lay.levels[0][0] != 0 {
+		t.Errorf("stepped down to level %d when shrinking was enough", lay.levels[0][0])
 	}
 }
 
@@ -297,18 +306,18 @@ func TestFitShrinksBeforeSteppingDown(t *testing.T) {
 // segments, and order is the bar.truncate_priority to place them in.
 func setupSides(t *testing.T, w int, order []string, l, m, r []module.Segment) [3][]run {
 	t.Helper()
-	Init(w, 1, config.BarSettings{
+	lay := New(nil, w, config.BarSettings{
 		TruncatePriority: order,
 		Ellipsis:         "…",
 		ShrinkMin:        3,
 	}, vaxis.Style{})
-	SetSlotCounts(1, 1, 1)
-	SetSpacerSlots([]bool{false}, []bool{false}, []bool{false})
-	SetSlotPriorities([]int{0}, []int{0}, []int{0})
+	lay.SetSlotCounts(1, 1, 1)
+	lay.SetSpacerSlots([]bool{false}, []bool{false}, []bool{false})
+	lay.SetSlotPriorities([]int{0}, []int{0}, []int{0})
 	for side, segs := range [3][]module.Segment{l, m, r} {
-		SetSnapshot(side, 0, [][]module.Segment{segs})
+		lay.SetSnapshot(side, 0, [][]module.Segment{segs})
 	}
-	return fit()
+	return lay.fit()
 }
 
 // A centered middle module halves the bar: the right side can only use the
@@ -317,6 +326,7 @@ func setupSides(t *testing.T, w int, order []string, l, m, r []module.Segment) [
 // shrink, and Render would then trim the right block head-first and eat the
 // icon. The room a side really has is what it must be fitted against.
 func TestFitAccountsForCenteredMiddle(t *testing.T) {
+	t.Parallel()
 	runs := setupSides(t, 60, []string{"middle", "right", "left"},
 		[]module.Segment{{Content: module.Text{S: "WS"}}},
 		[]module.Segment{{Content: module.Text{S: "CLOCK"}}},
@@ -344,6 +354,7 @@ func TestFitAccountsForCenteredMiddle(t *testing.T) {
 // setting has always promised: the anchor listed first keeps its content,
 // and the ones after it live with what is left.
 func TestFitFollowsTruncatePriority(t *testing.T) {
+	t.Parallel()
 	long := []module.Segment{{Content: module.Text{S: "AAAAAAAAAAAAAAAAAAAA", Shrink: 1}}} // 20
 	short := []module.Segment{{Content: module.Text{S: "BBBBBBBBBB", Shrink: 1}}}          // 10
 
@@ -370,6 +381,7 @@ func TestFitFollowsTruncatePriority(t *testing.T) {
 // compiled by the module package, rendered through a real Writer, laid out
 // by the real fitting pass.
 func TestEndToEndElasticFormat(t *testing.T) {
+	t.Parallel()
 	f := module.MustFormat("{icon} {title~} * {artists~}")
 	w := module.NewWriter(func([]string) module.Resolved {
 		return module.Resolved{Formatter: f}
@@ -383,19 +395,19 @@ func TestEndToEndElasticFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Init(21, 1, config.BarSettings{
+	lay := New(nil, 21, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		ShrinkMin:        3,
 	}, vaxis.Style{})
-	SetSlotCounts(0, 0, 1)
-	SetSpacerSlots(nil, nil, []bool{false})
-	SetSlotPriorities(nil, nil, []int{0})
-	SetSnapshot(2, 0, w.Levels())
+	lay.SetSlotCounts(0, 0, 1)
+	lay.SetSpacerSlots(nil, nil, []bool{false})
+	lay.SetSlotPriorities(nil, nil, []int{0})
+	lay.SetSnapshot(2, 0, w.Levels())
 
 	// 27 columns into 21: the icon and the " * " are untouchable, and the
 	// two elastic pieces level off at 8 each.
-	if got, want := runsText(fit()[2]), "> TITLETI… * ARTISTA…"; got != want {
+	if got, want := runsText(lay.fit()[2]), "> TITLETI… * ARTISTA…"; got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
@@ -405,6 +417,7 @@ func TestEndToEndElasticFormat(t *testing.T) {
 // elastic pieces never shrink and Render cuts the whole block head-first
 // instead -- taking the icons the elastic markers exist to protect.
 func TestFitAccountsForASideThatOverranTheMiddle(t *testing.T) {
+	t.Parallel()
 	runs := setupSides(t, 60, []string{"left", "middle", "right"},
 		[]module.Segment{{Content: module.Text{S: "LEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFTLEFT"}}}, // 40, rigid
 		[]module.Segment{{Content: module.Text{S: "CLOCK"}}},

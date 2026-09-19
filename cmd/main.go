@@ -267,13 +267,11 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			FontSize:      menus.PanelFontSize,
 			Family:        bar.Settings.Font,
 			BaselineNudge: bar.Settings.Text.BaselineNudge,
-			// The shaper comes up in the background; the frames drawn
-			// before it did fell back to plain cells, and those cells are
-			// cached, so drop them before asking for the repaint.
-			Notify: func() {
-				tui.Invalidate()
-				vx.PostEvent(vaxis.Redraw{})
-			},
+			// The shaper comes up in the background, so this fires off
+			// the main goroutine. It only asks for a repaint; the Redraw
+			// handler drops the cached cells, on the loop, where touching
+			// the layout is safe.
+			Notify: func() { vx.PostEvent(vaxis.Redraw{}) },
 		})
 		setTextCell(size)
 	}
@@ -282,11 +280,10 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 
 	w, h := win.Size()
 	log.Debug().Msgf("panel size (cells): %d, %d", w, h)
-	tui.Bind(vx)
-	tui.Init(w, h, bar.Settings, bar.GapStyle)
-	tui.SetSlotCounts(engine.SlotCounts())
-	tui.SetSpacerSlots(engine.SpacerSlots())
-	tui.SetSlotPriorities(engine.SlotPriorities())
+	lay := tui.New(vx, w, bar.Settings, bar.GapStyle)
+	lay.SetSlotCounts(engine.SlotCounts())
+	lay.SetSpacerSlots(engine.SpacerSlots())
+	lay.SetSlotPriorities(engine.SlotPriorities())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -317,7 +314,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	haveLastHit := false
 
 	render := func() {
-		tui.Render(win)
+		lay.Render(win)
 		vx.Render()
 	}
 	// fullResize repaints every cell instead of diffing. It is also the way
@@ -326,8 +323,8 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 	fullResize := func() {
 		win = vx.Window()
 		w, h = win.Size()
-		tui.Resize(w, h)
-		tui.Render(win)
+		lay.Resize(w)
+		lay.Render(win)
 		vx.Refresh()
 	}
 
@@ -350,11 +347,16 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			fullResize()
 			log.Debug().Msgf("panel size: %d, %d", ev.XPixel, ev.YPixel)
 		case vaxis.Redraw:
+			// Every poster of this is something that changes how a cell
+			// rasterises rather than what it says: the shaper coming up,
+			// or a colour the terminal finally answered for. The cache is
+			// keyed on the snapshot and knows about neither.
+			lay.Invalidate()
 			render()
 		case vaxis.ColorThemeUpdate:
 			// Indexed and default colours are resolved by asking the
 			// terminal, and it has just changed its mind.
-			tui.ForgetColors()
+			lay.ForgetColors()
 			fullResize()
 		case vaxis.Key:
 			if ev.String() == "Ctrl+c" {
@@ -386,7 +388,7 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 				rem := (ev.XPixel * sz.Cols) % sz.XPixel
 				leftHalf = rem*2 < sz.XPixel
 			}
-			hit, ok := tui.HitAt(ev.Col, leftHalf)
+			hit, ok := lay.HitAt(ev.Col, leftHalf)
 			// Motion carries nothing downstream but the slot it landed on:
 			// engine.Mouse only reads the pixels on a press. So a move that
 			// resolves to the same slot has nothing left to tell anyone.
@@ -429,12 +431,12 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 			}
 
 		case u := <-engine.Updates():
-			tui.SetSnapshot(int(u.Side), u.Index, u.Levels)
+			lay.SetSnapshot(int(u.Side), u.Index, u.Levels)
 			// Coalesce whatever else is already queued before rendering.
 			for {
 				select {
 				case u = <-engine.Updates():
-					tui.SetSnapshot(int(u.Side), u.Index, u.Levels)
+					lay.SetSnapshot(int(u.Side), u.Index, u.Levels)
 					continue
 				default:
 				}
@@ -474,15 +476,15 @@ func mainLoop(kitty *katnip.Kitty, rw io.ReadWriter) int {
 				Notify:        func() { vx.PostEvent(vaxis.Redraw{}) },
 			})
 			engine.Reload(bar)
-			tui.Init(w, h, bar.Settings, bar.GapStyle)
-			tui.SetSlotCounts(engine.SlotCounts())
-			tui.SetSpacerSlots(engine.SpacerSlots())
-			tui.SetSlotPriorities(engine.SlotPriorities())
+			lay.Configure(w, bar.Settings, bar.GapStyle)
+			lay.SetSlotCounts(engine.SlotCounts())
+			lay.SetSpacerSlots(engine.SpacerSlots())
+			lay.SetSlotPriorities(engine.SlotPriorities())
 			// Reseed the fresh slot tables with every runner's last
 			// output: kept modules must not blank out until their next
 			// event.
 			engine.Snapshots(func(side core.Side, idx int, levels [][]module.Segment) {
-				tui.SetSnapshot(int(side), idx, levels)
+				lay.SetSnapshot(int(side), idx, levels)
 			})
 			render()
 

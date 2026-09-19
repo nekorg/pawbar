@@ -18,13 +18,14 @@ import (
 // kitty, no fonts). Layout has to keep working meanwhile, falling back to
 // what the terminal makes of the text.
 func TestComplexTextFallsBackToPlainCells(t *testing.T) {
-	Init(200, 1, config.BarSettings{
+	t.Parallel()
+	lay := New(nil, 200, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 	}, vaxis.Style{})
 
 	const text = "ab हिन्दी cd"
-	cells := textToCells(text, vaxis.Style{}, Hit{}, true, false)
+	cells := lay.textToCells(text, vaxis.Style{}, Hit{}, true, false)
 	if len(cells) == 0 {
 		t.Fatal("no cells for complex text")
 	}
@@ -33,7 +34,7 @@ func TestComplexTextFallsBackToPlainCells(t *testing.T) {
 			t.Fatalf("cell %d carries a run with no shaper up", i)
 		}
 	}
-	if got, want := totalWidth(cells), SegmentsWidth([]module.Segment{{Content: module.Text{S: text}}}); got != want {
+	if got, want := totalWidth(cells), lay.SegmentsWidth([]module.Segment{{Content: module.Text{S: text}}}); got != want {
 		t.Errorf("width %d from cells, %d from SegmentsWidth", got, want)
 	}
 }
@@ -41,15 +42,16 @@ func TestComplexTextFallsBackToPlainCells(t *testing.T) {
 // Folding the ellipsis into a run is only for run columns; ordinary text
 // still gets the ellipsis the terminal draws.
 func TestEllipsisStaysPlainWithoutARun(t *testing.T) {
-	Init(200, 1, config.BarSettings{
+	t.Parallel()
+	lay := New(nil, 200, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 	}, vaxis.Style{})
 
-	cells := textToCells("abcdef", vaxis.Style{}, Hit{}, true, false)
-	got := withEllipsisAfter(cells)
-	if len(got) != len(cells)+len(ellipsisCells) {
-		t.Fatalf("got %d cells, want %d", len(got), len(cells)+len(ellipsisCells))
+	cells := lay.textToCells("abcdef", vaxis.Style{}, Hit{}, true, false)
+	got := lay.withEllipsisAfter(cells)
+	if len(got) != len(cells)+len(lay.ellipsisCells) {
+		t.Fatalf("got %d cells, want %d", len(got), len(cells)+len(lay.ellipsisCells))
 	}
 	last := got[len(got)-1]
 	if last.txt != nil {

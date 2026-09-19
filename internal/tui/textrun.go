@@ -9,7 +9,6 @@ package tui
 import (
 	"image"
 	"image/color"
-	"sync"
 
 	"github.com/nekorg/pawbar/internal/textrun"
 	"go.rockorager.dev/vaxis"
@@ -41,20 +40,20 @@ func runCells(r *textrun.Run, style vaxis.Style, hit Hit, hasMod, spacer bool) [
 // the cut landed in one. The run then draws its own ellipsis inside the
 // image, flush against the ink; a terminal ellipsis would sit in the next
 // whole cell, up to a cell away from the text it belongs to.
-func withEllipsisAfter(cells []cell) []cell {
+func (lay *Layout) withEllipsisAfter(cells []cell) []cell {
 	out := clone(cells)
 	if n := len(out); n > 0 && out[n-1].txt != nil {
-		return append(out, ellipsisFor(out[n-1])...)
+		return append(out, lay.ellipsisFor(out[n-1])...)
 	}
-	return append(out, ellipsisCells...)
+	return append(out, lay.ellipsisCells...)
 }
 
 // withEllipsisBefore is withEllipsisAfter at the other end.
-func withEllipsisBefore(cells []cell) []cell {
+func (lay *Layout) withEllipsisBefore(cells []cell) []cell {
 	if len(cells) > 0 && cells[0].txt != nil {
-		return append(ellipsisFor(cells[0]), cells...)
+		return append(lay.ellipsisFor(cells[0]), cells...)
 	}
-	return append(clone(ellipsisCells), cells...)
+	return append(clone(lay.ellipsisCells), cells...)
 }
 
 // ellipsisFor is the ellipsis handed to from's run as bare columns: the
@@ -62,9 +61,9 @@ func withEllipsisBefore(cells []cell) []cell {
 // ellipsis it draws inside the image. Trimming an already trimmed run folds
 // again, which only ever moves columns between the two, never adds a second
 // ellipsis.
-func ellipsisFor(from cell) []cell {
-	out := make([]cell, 0, len(ellipsisCells))
-	for _, e := range ellipsisCells {
+func (lay *Layout) ellipsisFor(from cell) []cell {
+	out := make([]cell, 0, len(lay.ellipsisCells))
+	for _, e := range lay.ellipsisCells {
 		c := from
 		c.c.Character = vaxis.Character{Grapheme: " ", Width: e.c.Width}
 		c.txt = &textCell{run: from.txt.run, idx: -1}
@@ -77,12 +76,12 @@ func ellipsisFor(from cell) []cell {
 // exactly the group's columns wide and one row tall, rasterised at the
 // terminal's own em and baseline, so it lands on integer pixels with nothing
 // to resample and nothing to centre.
-func drawTextRun(win vaxis.Window, col int, group []cell) {
+func (lay *Layout) drawTextRun(win vaxis.Window, col int, group []cell) {
 	cellW, cellH := textrun.CellSize()
 	if cellW <= 0 || cellH <= 0 || col < 0 {
 		return
 	}
-	span := min(len(group), width-col)
+	span := min(len(group), lay.width-col)
 	if span <= 0 {
 		return
 	}
@@ -100,7 +99,7 @@ func drawTextRun(win vaxis.Window, col int, group []cell) {
 	}
 	// A second trim can leave the ellipsis columns standing with none of the
 	// text they were cutting short; draw the ellipsis alone rather than a gap.
-	fg := fgOf(group[0].c.Style)
+	fg := lay.fgOf(group[0].c.Style)
 	var img *image.NRGBA
 	var key string
 	if lo < 0 {
@@ -113,11 +112,11 @@ func drawTextRun(win vaxis.Window, col int, group []cell) {
 	}
 
 	cacheKey := imgKey{key: key, w: cellW, h: cellH}
-	iconSeen[cacheKey] = true
-	kimg, cached := iconCache[cacheKey]
+	lay.seen[cacheKey] = true
+	kimg, cached := lay.icons[cacheKey]
 	if !cached {
 		kimg = win.Vx.NewKittyPixels(img)
-		iconCache[cacheKey] = kimg
+		lay.icons[cacheKey] = kimg
 	}
 	kimg.Draw(win.New(col, 0, span, 1))
 }
@@ -127,7 +126,7 @@ func drawTextRun(win vaxis.Window, col int, group []cell) {
 // be asked about. That is a round trip, and doing it from the render loop can
 // deadlock vaxis, so a miss draws in a placeholder and repaints once the
 // answer is in.
-func fgOf(st vaxis.Style) color.NRGBA {
+func (lay *Layout) fgOf(st vaxis.Style) color.NRGBA {
 	c := st.Foreground
 	if st.Attribute&vaxis.AttrReverse != 0 {
 		c = st.Background
@@ -136,26 +135,20 @@ func fgOf(st vaxis.Style) color.NRGBA {
 		return color.NRGBA{R: p[0], G: p[1], B: p[2], A: 0xff}
 	}
 
-	colorMu.Lock()
-	defer colorMu.Unlock()
-	if v, ok := colorCache[c]; ok {
+	lay.colorMu.Lock()
+	defer lay.colorMu.Unlock()
+	if v, ok := lay.colorCache[c]; ok {
 		return v
 	}
-	if !colorPending[c] {
-		colorPending[c] = true
-		go resolveColor(c)
+	if !lay.colorPending[c] {
+		lay.colorPending[c] = true
+		go lay.resolveColor(c)
 	}
 	return color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 }
 
-var (
-	colorMu      sync.Mutex
-	colorCache   = map[vaxis.Color]color.NRGBA{}
-	colorPending = map[vaxis.Color]bool{}
-)
-
-func resolveColor(c vaxis.Color) {
-	vx := term
+func (lay *Layout) resolveColor(c vaxis.Color) {
+	vx := lay.term
 	if vx == nil {
 		return
 	}
@@ -169,20 +162,20 @@ func resolveColor(c vaxis.Color) {
 	if len(p) != 3 {
 		return
 	}
-	colorMu.Lock()
-	colorCache[c] = color.NRGBA{R: p[0], G: p[1], B: p[2], A: 0xff}
-	colorMu.Unlock()
+	lay.colorMu.Lock()
+	lay.colorCache[c] = color.NRGBA{R: p[0], G: p[1], B: p[2], A: 0xff}
+	lay.colorMu.Unlock()
 	vx.PostEvent(vaxis.Redraw{})
 }
 
 // ForgetColors drops the resolved palette. Call on a theme change: the
 // terminal's answers to those queries have just changed.
-func ForgetColors() {
-	colorMu.Lock()
-	clear(colorCache)
-	clear(colorPending)
-	colorMu.Unlock()
+func (lay *Layout) ForgetColors() {
+	lay.colorMu.Lock()
+	clear(lay.colorCache)
+	clear(lay.colorPending)
+	lay.colorMu.Unlock()
 	// Rasterised runs bake a resolved fg into the image key, so cached
 	// cells are keyed on colours that no longer exist.
-	Invalidate()
+	lay.Invalidate()
 }

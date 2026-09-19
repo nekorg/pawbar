@@ -32,22 +32,22 @@ func segs(parts ...string) []module.Segment {
 // benchBar is a realistic desktop bar: workspaces, window title and a media
 // line on the left, a clock in the middle, and six status modules on the
 // right, each with a detail ladder to step down.
-func benchBar(cols int) {
+func benchBar(cols int) *Layout {
 	ellipsis := true
-	Init(cols, 1, config.BarSettings{
+	lay := New(nil, cols, config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		EnableEllipsis:   &ellipsis,
 		Ellipsis:         "…",
 		Gap:              " ",
 		ShrinkMin:        3,
 	}, vaxis.Style{})
-	SetSlotCounts(3, 1, 6)
-	SetSpacerSlots(
+	lay.SetSlotCounts(3, 1, 6)
+	lay.SetSpacerSlots(
 		[]bool{false, false, false},
 		[]bool{false},
 		[]bool{false, false, false, false, false, false},
 	)
-	SetSlotPriorities(
+	lay.SetSlotPriorities(
 		[]int{0, 1, 2},
 		[]int{3},
 		[]int{4, 5, 6, 7, 8, 9},
@@ -80,14 +80,15 @@ func benchBar(cols int) {
 		{segs("󰂀 ", "87% 3h12m"), segs("󰂀 ", "87%")},
 	}
 	for idx, ladder := range left {
-		SetSnapshot(0, idx, ladder)
+		lay.SetSnapshot(0, idx, ladder)
 	}
 	for idx, ladder := range mid {
-		SetSnapshot(1, idx, ladder)
+		lay.SetSnapshot(1, idx, ladder)
 	}
 	for idx, ladder := range right {
-		SetSnapshot(2, idx, ladder)
+		lay.SetSnapshot(2, idx, ladder)
 	}
+	return lay
 }
 
 // BenchmarkBarLayout is the whole per-frame cost pawbar pays: flatten every
@@ -95,12 +96,12 @@ func benchBar(cols int) {
 func BenchmarkBarLayout(b *testing.B) {
 	const cols = 240
 	win := vaxis.NewOffscreenWindow(cols, 1)
-	benchBar(cols)
+	lay := benchBar(cols)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i += 1 {
-		Render(win)
+		lay.Render(win)
 	}
 }
 
@@ -109,11 +110,11 @@ func BenchmarkBarLayout(b *testing.B) {
 func BenchmarkBarLayoutNarrow(b *testing.B) {
 	const cols = 80
 	win := vaxis.NewOffscreenWindow(cols, 1)
-	benchBar(cols)
+	lay := benchBar(cols)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i += 1 {
-		Render(win)
+		lay.Render(win)
 	}
 }

@@ -34,12 +34,12 @@ func anchorOf(s string) anchor {
 
 // buildBlocks flattens the snapshots into one cell run per side, ordered
 // by truncation priority, with elastic segments already shrunk to fit.
-func buildBlocks() []block {
-	runs := fit()
+func (lay *Layout) buildBlocks() []block {
+	runs := lay.fit()
 
 	sides := map[string]int{"left": 0, "middle": 1, "right": 2}
 	blocks := make([]block, 0, 3)
-	for _, name := range truncOrder {
+	for _, name := range lay.truncOrder {
 		var cells []cell
 		for _, r := range runs[sides[name]] {
 			cells = append(cells, r.cells...)
@@ -52,18 +52,18 @@ func buildBlocks() []block {
 // flatten lays a side's slots out as runs — one per segment, so the fitting
 // pass can shrink the elastic ones individually — dropping spacers that have
 // gone stranded and inserting the configured gap between neighbours.
-func flatten(side int) []run {
-	visible := visibleSlots(side)
+func (lay *Layout) flatten(side int) []run {
+	visible := lay.visibleSlots(side)
 
 	var out []run
 	prevSpacer, first := false, true
 	for _, idx := range visible {
-		spacer := isSpacer(side, idx)
-		if !first && len(gapCells) > 0 && !prevSpacer && !spacer {
-			out = append(out, run{cells: clone(gapCells)})
+		spacer := lay.isSpacer(side, idx)
+		if !first && len(lay.gapCells) > 0 && !prevSpacer && !spacer {
+			out = append(out, run{cells: clone(lay.gapCells)})
 		}
 		first, prevSpacer = false, spacer
-		out = append(out, slotRuns(side, idx, spacer)...)
+		out = append(out, lay.slotRuns(side, idx, spacer)...)
 	}
 	return out
 }
@@ -74,15 +74,15 @@ func flatten(side int) []run {
 // reassigns run.cells to a sub-slice or to a freshly cloned one, and
 // buildBlocks copies every cell out before Render trims anything, so nothing
 // downstream writes through into the cache.
-func slotRuns(side, idx int, spacer bool) []run {
-	lvl := slotLevel(side, idx)
-	levelCache := slotLevels(side, idx)
+func (lay *Layout) slotRuns(side, idx int, spacer bool) []run {
+	lvl := lay.slotLevel(side, idx)
+	levelCache := lay.slotLevels(side, idx)
 	if lvl < len(levelCache) && levelCache[lvl].ok {
 		return levelCache[lvl].runs
 	}
 
 	var out []run
-	for _, seg := range slotSegments(side, idx) {
+	for _, seg := range lay.slotSegments(side, idx) {
 		hit := Hit{Side: side, Index: idx, Region: seg.Region, Shape: seg.Shape}
 		switch c := seg.Content.(type) {
 		case module.Image:
@@ -92,7 +92,7 @@ func slotRuns(side, idx int, spacer bool) []run {
 			out = append(out, run{cells: imageCells(c, seg.Style, hit, spacer)})
 		case module.Text:
 			out = append(out, run{
-				cells:  textToCells(c.S, seg.Style, hit, true, spacer),
+				cells:  lay.textToCells(c.S, seg.Style, hit, true, spacer),
 				shrink: c.Shrink,
 			})
 		}
@@ -103,8 +103,8 @@ func slotRuns(side, idx int, spacer bool) []run {
 	return out
 }
 
-func isSpacer(side, idx int) bool {
-	return idx < len(spacers[side]) && spacers[side][idx]
+func (lay *Layout) isSpacer(side, idx int) bool {
+	return idx < len(lay.spacers[side]) && lay.spacers[side][idx]
 }
 
 // visibleSlots returns the slots of a side that take part in the layout, in
@@ -116,11 +116,11 @@ func isSpacer(side, idx int) bool {
 // exist but are all empty. Facing *nothing* is different from facing
 // something empty: a trailing divider at the edge of a side faces the rest
 // of the bar rather than a neighbour, and is kept.
-func visibleSlots(side int) []int {
-	n := len(snapshots[side])
+func (lay *Layout) visibleSlots(side int) []int {
+	n := len(lay.snapshots[side])
 	empty := make([]bool, n)
 	for i := range n {
-		empty[i] = len(slotSegments(side, i)) == 0
+		empty[i] = len(lay.slotSegments(side, i)) == 0
 	}
 
 	// anyL[i] reports whether any non-spacer slot below i has output,
@@ -128,7 +128,7 @@ func visibleSlots(side int) []int {
 	anyL, existsL := make([]bool, n+1), make([]bool, n+1)
 	for i := range n {
 		anyL[i+1], existsL[i+1] = anyL[i], existsL[i]
-		if isSpacer(side, i) {
+		if lay.isSpacer(side, i) {
 			continue
 		}
 		existsL[i+1] = true
@@ -137,7 +137,7 @@ func visibleSlots(side int) []int {
 	anyR, existsR := make([]bool, n+1), make([]bool, n+1)
 	for i := n - 1; i >= 0; i-- {
 		anyR[i], existsR[i] = anyR[i+1], existsR[i+1]
-		if isSpacer(side, i) {
+		if lay.isSpacer(side, i) {
 			continue
 		}
 		existsR[i] = true
@@ -146,7 +146,7 @@ func visibleSlots(side int) []int {
 
 	out := make([]int, 0, n)
 	for i := range n {
-		if isSpacer(side, i) {
+		if lay.isSpacer(side, i) {
 			if (existsL[i] && !anyL[i]) || (existsR[i+1] && !anyR[i+1]) {
 				continue
 			}
@@ -182,10 +182,10 @@ func imageCells(img module.Image, style vaxis.Style, hit Hit, spacer bool) []cel
 // textToCells splits text into grapheme cells carrying hit metadata. Scripts
 // a cell grid cannot hold are split off first and laid out as rasterised
 // runs; everything else stays real terminal text.
-func textToCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []cell {
+func (lay *Layout) textToCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []cell {
 	parts := textrun.Split(s)
 	if parts == nil {
-		return plainCells(s, style, hit, hasMod, spacer)
+		return lay.plainCells(s, style, hit, hasMod, spacer)
 	}
 	var out []cell
 	bold := style.Attribute&vaxis.AttrBold != 0
@@ -199,17 +199,17 @@ func textToCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []ce
 				continue
 			}
 		}
-		out = append(out, plainCells(p.Text, style, hit, hasMod, spacer)...)
+		out = append(out, lay.plainCells(p.Text, style, hit, hasMod, spacer)...)
 	}
 	return out
 }
 
-func plainCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []cell {
+func (lay *Layout) plainCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []cell {
 	chars := vaxis.Characters(s)
 	out := make([]cell, 0, len(chars))
 	for _, ch := range chars {
-		if term != nil {
-			ch.Width = term.CharacterWidth(ch.Grapheme)
+		if lay.term != nil {
+			ch.Width = lay.term.CharacterWidth(ch.Grapheme)
 		}
 		out = append(out, cell{
 			c:        vaxis.Cell{Character: ch, Style: style},
@@ -222,7 +222,7 @@ func plainCells(s string, style vaxis.Style, hit Hit, hasMod, spacer bool) []cel
 }
 
 // SegmentsWidth measures rendered segments in bar columns.
-func SegmentsWidth(segs []module.Segment) int {
+func (lay *Layout) SegmentsWidth(segs []module.Segment) int {
 	w := 0
 	for _, seg := range segs {
 		var text string
@@ -245,8 +245,8 @@ func SegmentsWidth(segs []module.Segment) int {
 				}
 			}
 			for _, ch := range vaxis.Characters(p.Text) {
-				if term != nil {
-					ch.Width = term.CharacterWidth(ch.Grapheme)
+				if lay.term != nil {
+					ch.Width = lay.term.CharacterWidth(ch.Grapheme)
 				}
 				w += ch.Width
 			}
@@ -257,22 +257,22 @@ func SegmentsWidth(segs []module.Segment) int {
 
 // writeCell writes one cell (padding wide graphemes) and mirrors it into
 // the hit table. Returns x + grapheme width.
-func writeCell(win vaxis.Window, x int, c cell) int {
+func (lay *Layout) writeCell(win vaxis.Window, x int, c cell) int {
 	if c.c.Width == 0 {
 		// Layout budgeted no column for this, but vaxis spends one on any
 		// cell it holds. Drop it instead of letting it push the row over.
 		return x
 	}
-	if x+c.c.Width > width {
+	if x+c.c.Width > lay.width {
 		return x + c.c.Width
 	}
 	win.SetCell(x, 0, c.c)
-	state[x] = c
+	lay.state[x] = c
 
 	for w := 1; w < c.c.Width; w++ {
 		empty := vaxis.Cell{Style: c.c.Style}
 		win.SetCell(x+w, 0, empty)
-		state[x+w] = cell{c: empty, hit: c.hit, hasMod: c.hasMod, isSpacer: c.isSpacer}
+		lay.state[x+w] = cell{c: empty, hit: c.hit, hasMod: c.hasMod, isSpacer: c.isSpacer}
 	}
 	return x + c.c.Width
 }
@@ -287,7 +287,7 @@ func totalWidth(cells []cell) int {
 
 // trimStart keeps the leading cells that fit in w, optionally appending an
 // ellipsis.
-func trimStart(cells []cell, w int, ellipsis bool) []cell {
+func (lay *Layout) trimStart(cells []cell, w int, ellipsis bool) []cell {
 	if w <= 0 {
 		return nil
 	}
@@ -295,10 +295,10 @@ func trimStart(cells []cell, w int, ellipsis bool) []cell {
 		return cells
 	}
 	if ellipsis {
-		if ellipsisWidth >= w {
+		if lay.ellipsisWidth >= w {
 			return nil
 		}
-		w -= ellipsisWidth
+		w -= lay.ellipsisWidth
 	}
 	acc := 0
 	end := 0
@@ -307,14 +307,14 @@ func trimStart(cells []cell, w int, ellipsis bool) []cell {
 	}
 	trim := cells[:end]
 	if ellipsis {
-		trim = withEllipsisAfter(trim)
+		trim = lay.withEllipsisAfter(trim)
 	}
 	return trim
 }
 
 // trimEnd keeps the trailing cells that fit in w, optionally prepending an
 // ellipsis.
-func trimEnd(cells []cell, w int, ellipsis bool) []cell {
+func (lay *Layout) trimEnd(cells []cell, w int, ellipsis bool) []cell {
 	if w <= 0 {
 		return nil
 	}
@@ -322,10 +322,10 @@ func trimEnd(cells []cell, w int, ellipsis bool) []cell {
 		return cells
 	}
 	if ellipsis {
-		if ellipsisWidth >= w {
+		if lay.ellipsisWidth >= w {
 			return nil
 		}
-		w -= ellipsisWidth
+		w -= lay.ellipsisWidth
 	}
 	acc := 0
 	start := len(cells)
@@ -335,39 +335,9 @@ func trimEnd(cells []cell, w int, ellipsis bool) []cell {
 	}
 	trim := cells[start:]
 	if ellipsis {
-		trim = withEllipsisBefore(trim)
+		trim = lay.withEllipsisBefore(trim)
 	}
 	return trim
-}
-
-// trimMiddle keeps the middle, trimming both ends evenly.
-func trimMiddle(cells []cell, w int, ellipsis bool) []cell {
-	if w <= 0 || totalWidth(cells) <= w {
-		return cells
-	}
-	if ellipsis {
-		ellW := ellipsisWidth * 2
-		if ellW >= w {
-			return nil
-		}
-		w -= ellW
-	}
-
-	lo, hi := 0, len(cells)-1
-	cur := totalWidth(cells)
-	for cur > w && lo < hi {
-		cur -= cells[lo].c.Width
-		lo++
-		if cur > w && lo < hi {
-			cur -= cells[hi].c.Width
-			hi--
-		}
-	}
-	trimmed := cells[lo : hi+1]
-	if ellipsis {
-		trimmed = withEllipsisAfter(withEllipsisBefore(trimmed))
-	}
-	return trimmed
 }
 
 func clone(src []cell) []cell {

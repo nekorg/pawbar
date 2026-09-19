@@ -24,15 +24,15 @@ type run struct {
 // would let a side look like it fits and then be positionally trimmed
 // anyway — head-first, eating exactly the icon the elastic markers exist to
 // protect.
-func shrink(runs *[3][]run) bool {
+func (lay *Layout) shrink(runs *[3][]run) bool {
 	// lo/hi are the free columns left by the sides placed so far; mlo/mhi
 	// are where a centered middle block landed, once there is one.
-	lo, hi := 0, width
+	lo, hi := 0, lay.width
 	mlo, mhi := -1, -1
 
 	fits := true
-	for _, side := range drawOrder() {
-		if !shrinkSide(runs[side], max(budgetOf(side, lo, hi, mlo, mhi), 0)) {
+	for _, side := range lay.drawOrder() {
+		if !lay.shrinkSide(runs[side], max(lay.budgetOf(side, lo, hi, mlo, mhi), 0)) {
 			fits = false
 		}
 		w := runsWidth(runs[side])
@@ -43,7 +43,7 @@ func shrink(runs *[3][]run) bool {
 			hi -= w
 		case middle:
 			if w > 0 {
-				mlo = (width - w) / 2
+				mlo = (lay.width - w) / 2
 				mhi = mlo + w
 			}
 		}
@@ -61,7 +61,7 @@ func shrink(runs *[3][]run) bool {
 // module overrun the middle, leave the right side a budget it did not have,
 // and so never tell it to shrink: the elastic parts stayed at full length
 // and Render then cut the whole block head-first instead.
-func budgetOf(side, lo, hi, mlo, mhi int) int {
+func (lay *Layout) budgetOf(side, lo, hi, mlo, mhi int) int {
 	switch anchor(side) {
 	case left:
 		if mlo >= 0 {
@@ -74,19 +74,19 @@ func budgetOf(side, lo, hi, mlo, mhi int) int {
 		}
 		return hi - lo
 	default: // middle: centered, so it grows symmetrically from the center
-		return min(width-2*lo, 2*hi-width)
+		return min(lay.width-2*lo, 2*hi-lay.width)
 	}
 }
 
 // drawOrder is the order Render places the sides in — bar.truncate_priority,
 // earliest first. Whatever is placed first keeps its room; the sides after
 // it fit around what is left.
-func drawOrder() [3]int {
+func (lay *Layout) drawOrder() [3]int {
 	out := [3]int{0, 1, 2}
-	if len(truncOrder) != len(out) {
+	if len(lay.truncOrder) != len(out) {
 		return out
 	}
-	for i, name := range truncOrder {
+	for i, name := range lay.truncOrder {
 		out[i] = int(anchorOf(name))
 	}
 	return out
@@ -97,7 +97,7 @@ func drawOrder() [3]int {
 // run gives way first, and once runs are level they shrink together. Nothing
 // drops below shrinkMin columns and nothing rigid is touched — a play/pause
 // icon does not disappear so that a song title can stay long.
-func shrinkSide(runs []run, budget int) bool {
+func (lay *Layout) shrinkSide(runs []run, budget int) bool {
 	total := 0
 	var elastic []*run
 	for i := range runs {
@@ -119,16 +119,16 @@ func shrinkSide(runs []run, budget int) bool {
 	elasticTotal := 0
 	for i, r := range elastic {
 		naturals[i] = totalWidth(r.cells)
-		floors[i] = min(naturals[i], shrinkMin)
+		floors[i] = min(naturals[i], lay.shrinkMin)
 		weights[i] = r.shrink
 		elasticTotal += naturals[i]
 	}
 
-	alloc := waterfill(naturals, floors, weights, elasticTotal-(total-budget))
+	alloc := lay.waterfill(naturals, floors, weights, elasticTotal-(total-budget))
 	fitted := 0
 	for i, r := range elastic {
 		if alloc[i] < naturals[i] {
-			r.cells = trimStart(r.cells, alloc[i], useEllipsis)
+			r.cells = lay.trimStart(r.cells, alloc[i], lay.useEllipsis)
 		}
 		fitted += alloc[i]
 	}
@@ -154,13 +154,13 @@ func runsWidth(runs []run) int {
 //
 // Levels are recomputed from scratch every frame, so widening the bar back
 // out restores the detail a narrower one gave up.
-func fit() [3][]run {
-	for side := range levels {
-		clear(levels[side])
+func (lay *Layout) fit() [3][]run {
+	for side := range lay.levels {
+		clear(lay.levels[side])
 	}
-	runs := [3][]run{flatten(0), flatten(1), flatten(2)}
-	for !shrink(&runs) && stepDown() {
-		runs = [3][]run{flatten(0), flatten(1), flatten(2)}
+	runs := [3][]run{lay.flatten(0), lay.flatten(1), lay.flatten(2)}
+	for !lay.shrink(&runs) && lay.stepDown() {
+		runs = [3][]run{lay.flatten(0), lay.flatten(1), lay.flatten(2)}
 	}
 	return runs
 }
@@ -170,15 +170,15 @@ func fit() [3][]run {
 // distance from the bar's outer edge (the innermost gives way first), then
 // by the side's own truncation priority — enough to make the choice
 // deterministic without asking the user to rank every module.
-func stepDown() bool {
+func (lay *Layout) stepDown() bool {
 	best, bestSide := -1, -1
 	var bestRank rank
-	for side := range snapshots {
-		for idx := range snapshots[side] {
-			if levels[side][idx]+1 >= len(snapshots[side][idx]) {
+	for side := range lay.snapshots {
+		for idx := range lay.snapshots[side] {
+			if lay.levels[side][idx]+1 >= len(lay.snapshots[side][idx]) {
 				continue
 			}
-			r := rank{slotPriority(side, idx), edgeDistance(side, idx), sideRank(side)}
+			r := rank{lay.slotPriority(side, idx), lay.edgeDistance(side, idx), lay.sideRank(side)}
 			if best == -1 || r.less(bestRank) {
 				best, bestSide, bestRank = idx, side, r
 			}
@@ -187,7 +187,7 @@ func stepDown() bool {
 	if best == -1 {
 		return false
 	}
-	levels[bestSide][best]++
+	lay.levels[bestSide][best]++
 	return true
 }
 
@@ -203,29 +203,29 @@ func (r rank) less(o rank) bool {
 	return false
 }
 
-func slotPriority(side, idx int) int {
-	if idx < len(priorities[side]) {
-		return priorities[side][idx]
+func (lay *Layout) slotPriority(side, idx int) int {
+	if idx < len(lay.priorities[side]) {
+		return lay.priorities[side][idx]
 	}
 	return 0
 }
 
 // edgeDistance is how far a slot sits from the outer edge its side is
 // anchored to. Negated so that the innermost slot sorts first.
-func edgeDistance(side, idx int) int {
+func (lay *Layout) edgeDistance(side, idx int) int {
 	if side == 2 { // right: the outer edge is the end of the list
-		return idx - len(snapshots[side])
+		return idx - len(lay.snapshots[side])
 	}
 	return -idx
 }
 
 // sideRank orders the sides by bar.truncate_priority: the side listed first
 // keeps its content longest, so it degrades last.
-func sideRank(side int) int {
+func (lay *Layout) sideRank(side int) int {
 	name := [3]string{"left", "middle", "right"}[side]
-	for i, n := range truncOrder {
+	for i, n := range lay.truncOrder {
 		if n == name {
-			return len(truncOrder) - i
+			return len(lay.truncOrder) - i
 		}
 	}
 	return 0
@@ -239,7 +239,7 @@ func sideRank(side int) int {
 // The result is what "shrink the longer one until they match, then shrink
 // both together" means precisely, and it is a function of the widths alone,
 // so the same bar width always lays out the same way.
-func waterfill(naturals, floors, weights []int, budget int) []int {
+func (lay *Layout) waterfill(naturals, floors, weights []int, budget int) []int {
 	take := func(lambda int) ([]int, int) {
 		out := make([]int, len(naturals))
 		sum := 0
@@ -252,7 +252,7 @@ func waterfill(naturals, floors, weights []int, budget int) []int {
 
 	// A run never gets more than the whole bar, and weights are >= 1, so
 	// width bounds lambda.
-	lo, hi := 0, width
+	lo, hi := 0, lay.width
 	for lo < hi {
 		mid := (lo + hi + 1) / 2
 		if _, sum := take(mid); sum <= budget {

@@ -15,35 +15,33 @@ import (
 	"go.rockorager.dev/vaxis"
 )
 
-// layout state is package-global, so these tests reseed it and cannot run
-// in parallel.
-
 // setup lays out one side (left) from a slot description: each slot is its
 // rendered text ("" for a module that rendered nothing) and whether it is a
 // spacer module.
-func setup(t *testing.T, gap string, slots []slot) {
+func setup(t *testing.T, gap string, slots []slot) *Layout {
 	t.Helper()
 	settings := config.BarSettings{
 		TruncatePriority: []string{"right", "left", "middle"},
 		Ellipsis:         "…",
 		Gap:              gap,
 	}
-	Init(200, 1, settings, vaxis.Style{})
-	SetSlotCounts(len(slots), 0, 0)
+	lay := New(nil, 200, settings, vaxis.Style{})
+	lay.SetSlotCounts(len(slots), 0, 0)
 
 	spacerFlags := make([]bool, len(slots))
 	for i, s := range slots {
 		spacerFlags[i] = s.spacer
 	}
-	SetSpacerSlots(spacerFlags, nil, nil)
+	lay.SetSpacerSlots(spacerFlags, nil, nil)
 
 	for i, s := range slots {
 		if s.text == "" {
-			SetSnapshot(0, i, [][]module.Segment{nil})
+			lay.SetSnapshot(0, i, [][]module.Segment{nil})
 			continue
 		}
-		SetSnapshot(0, i, [][]module.Segment{{{Content: module.Text{S: s.text}}}})
+		lay.SetSnapshot(0, i, [][]module.Segment{{{Content: module.Text{S: s.text}}}})
 	}
+	return lay
 }
 
 type slot struct {
@@ -76,6 +74,7 @@ func runsCells(runs []run) []cell {
 }
 
 func TestFlattenSuppressesStrandedSpacers(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		slots []slot
@@ -119,8 +118,9 @@ func TestFlattenSuppressesStrandedSpacers(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			setup(t, "", c.slots)
-			if got := runsText(flatten(0)); got != c.want {
+			t.Parallel()
+			lay := setup(t, "", c.slots)
+			if got := runsText(lay.flatten(0)); got != c.want {
 				t.Errorf("got %q want %q", got, c.want)
 			}
 		})
@@ -128,6 +128,7 @@ func TestFlattenSuppressesStrandedSpacers(t *testing.T) {
 }
 
 func TestFlattenGap(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		gap   string
@@ -200,8 +201,9 @@ func TestFlattenGap(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			setup(t, c.gap, c.slots)
-			if got := runsText(flatten(0)); got != c.want {
+			t.Parallel()
+			lay := setup(t, c.gap, c.slots)
+			if got := runsText(lay.flatten(0)); got != c.want {
 				t.Errorf("got %q want %q", got, c.want)
 			}
 		})
@@ -211,18 +213,19 @@ func TestFlattenGap(t *testing.T) {
 // A gap must not swallow clicks: it carries no module, and HitAt donates it
 // to whichever neighbour the pointer leans toward.
 func TestGapDonatesHitArea(t *testing.T) {
-	setup(t, " ", []slot{{text: "cpu"}, {text: "ram"}})
-	copy(state, runsCells(flatten(0)))
+	t.Parallel()
+	lay := setup(t, " ", []slot{{text: "cpu"}, {text: "ram"}})
+	copy(lay.state, runsCells(lay.flatten(0)))
 
 	const gapCol = 3 // "cpu" then the gap
-	if state[gapCol].hasMod {
+	if lay.state[gapCol].hasMod {
 		t.Fatalf("gap cell should carry no module")
 	}
-	hit, ok := HitAt(gapCol, true)
+	hit, ok := lay.HitAt(gapCol, true)
 	if !ok || hit.Index != 0 {
 		t.Errorf("left half of the gap: got %+v ok=%v, want slot 0", hit, ok)
 	}
-	hit, ok = HitAt(gapCol, false)
+	hit, ok = lay.HitAt(gapCol, false)
 	if !ok || hit.Index != 1 {
 		t.Errorf("right half of the gap: got %+v ok=%v, want slot 1", hit, ok)
 	}
