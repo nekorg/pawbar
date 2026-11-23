@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path"
@@ -196,6 +197,13 @@ func request(command string, v any) error {
 		return fmt.Errorf("write %q: %w", command, err)
 	}
 	if v == nil {
+		reply, err := io.ReadAll(sock)
+		if err != nil {
+			return fmt.Errorf("read %q reply: %w", command, err)
+		}
+		if r := strings.TrimSpace(string(reply)); r != "ok" {
+			return fmt.Errorf("%q: %s", command, r)
+		}
 		return nil
 	}
 	if err := json.NewDecoder(sock).Decode(v); err != nil {
@@ -379,12 +387,20 @@ func GoToWorkspace(name string) error {
 // persistent workspace has no monitor of its own until something focuses
 // one first.
 func FocusMonitor(name string) error {
-	return request("/dispatch focusmonitor "+name, nil)
+	command := "/dispatch hl.dsp.focus({ monitor = \"" + name + "\" })"
+	if isHyprVersionLessThan("0.55") {
+		command = "/dispatch focusmonitor " + name
+	}
+	return request(command, nil)
 }
 
 // ToggleSpecialWorkspace opens or closes a special workspace on the
 // focused monitor. name is the part after "special:" ("" is the unnamed
 // special workspace).
 func ToggleSpecialWorkspace(name string) error {
-	return request("/dispatch togglespecialworkspace "+name, nil)
+	command := "/dispatch hl.dsp.workspace.toggle_special(\"" + name + "\")"
+	if isHyprVersionLessThan("0.55") {
+		command = "/dispatch togglespecialworkspace " + name
+	}
+	return request(command, nil)
 }
