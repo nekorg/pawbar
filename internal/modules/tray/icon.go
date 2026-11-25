@@ -20,6 +20,7 @@ import (
 	"github.com/codelif/gorsvg"
 	"github.com/codelif/xdgicons"
 	"github.com/nekorg/pawbar/internal/services/sni"
+	"github.com/nekorg/pawbar/pkg/menus"
 	"github.com/nekorg/pawbar/pkg/module"
 )
 
@@ -61,7 +62,7 @@ func iconColor(ctx *module.Ctx) color.Color {
 func iconKey(it sni.Item, fg color.Color) string {
 	if it.IconName != "" {
 		key := "name:" + it.IconThemeDir + "|" + it.IconName
-		if strings.HasSuffix(it.IconName, "-symbolic") {
+		if menus.IsSymbolic(it.IconName) {
 			key += "|" + colorKey(fg)
 		}
 		return key
@@ -107,6 +108,9 @@ func resolveIconPath(name, themeDir string) string {
 	if name == "" {
 		return ""
 	}
+	if p, ok := menus.IconFile(name); ok {
+		return p
+	}
 	if p := lookupInDir(themeDir, name); p != "" {
 		return p
 	}
@@ -136,7 +140,7 @@ func lookupInDir(dir, name string) string {
 // loadIcon decodes an icon file, recoloring symbolic SVGs to c. Mirrors the
 // menu icon loader.
 func loadIcon(path, name string, c color.Color) (image.Image, error) {
-	isSymbolic := strings.HasSuffix(name, "-symbolic")
+	isSymbolic := menus.IsSymbolic(name)
 	ext := strings.ToLower(filepath.Ext(path))
 
 	f, err := os.Open(path)

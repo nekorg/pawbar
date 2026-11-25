@@ -7,6 +7,8 @@
 package menus
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -194,9 +196,35 @@ var iconLookup = sync.OnceValue(func() *xdgicons.IconLookup {
 // which lands smaller in the same box.
 const themeIconSize = 24
 
+// IconFile returns name itself when it is an absolute path to an existing
+// file. sni items and dbusmenu entries often put a path in their icon name
+// instead of a theme name.
+func IconFile(name string) (string, bool) {
+	if !filepath.IsAbs(name) {
+		return "", false
+	}
+	if st, err := os.Stat(name); err != nil || st.IsDir() {
+		return "", false
+	}
+	return name, true
+}
+
+// IsSymbolic reports whether an icon name or icon file path names a
+// symbolic icon, the kind recolored to the foreground.
+func IsSymbolic(name string) bool {
+	if filepath.IsAbs(name) {
+		// only for paths: theme names like org.foo.Bar-symbolic have dots too
+		name = strings.TrimSuffix(name, filepath.Ext(name))
+	}
+	return strings.HasSuffix(name, "-symbolic")
+}
+
 func resolveIconPath(name string) string {
 	if name == "" {
 		return ""
+	}
+	if p, ok := IconFile(name); ok {
+		return p
 	}
 	var icon xdgicons.Icon
 	if strings.HasSuffix(name, "-symbolic") {

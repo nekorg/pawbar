@@ -10,6 +10,7 @@ import (
 	_ "embed"
 	"image"
 	"image/color"
+	"path/filepath"
 	"strconv"
 
 	"github.com/nekorg/pawbar/internal/services/sni"
@@ -147,12 +148,12 @@ func (m *trayModule) icon(it sni.Item, fg color.Color) (image.Image, string) {
 
 func labelFor(it sni.Item) string {
 	switch {
-	case it.IconName != "":
-		return it.IconName
 	case it.Title != "":
 		return it.Title
 	case it.Id != "":
 		return it.Id
+	case it.IconName != "":
+		return filepath.Base(it.IconName)
 	default:
 		return "?"
 	}

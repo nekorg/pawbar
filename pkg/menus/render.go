@@ -216,7 +216,7 @@ func (r *listRenderer) renderIcon(it *wire.Item, row int, defaultColor color.Col
 }
 
 func loadIcon(path, name string, c color.Color) (image.Image, error) {
-	isSymbolic := strings.HasSuffix(name, "-symbolic")
+	isSymbolic := IsSymbolic(name)
 	ext := strings.ToLower(filepath.Ext(path))
 
 	f, err := os.Open(path)
